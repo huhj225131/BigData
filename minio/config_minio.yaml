@@ -1,0 +1,80 @@
+# --- SERVICE 1: HEADLESS (DÀNH CHO NỘI BỘ) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio       # Tên ngắn gọn để các Pod gọi nhau: minio-0.minio
+  labels:
+    app: minio
+spec:
+  clusterIP: None   # <--- HEADLESS: Không có IP chung, chỉ dùng định danh DNS
+  ports:
+  - port: 9000
+    name: api
+  - port: 9001
+    name: console
+  selector:
+    app: minio
+---
+
+# --- SERVICE 2: PUBLIC (DÀNH CHO BẠN DÙNG) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-public # Tên khác để phân biệt
+  labels:
+    app: minio
+spec:
+  type: NodePort     # Mở cổng ra ngoài để bạn truy cập
+  ports:
+  - port: 9000
+    targetPort: 9000
+    name: api
+  - port: 9001
+    targetPort: 9001
+    name: console
+  selector:
+    app: minio       # Cũng trỏ vào cùng 1 loại Pod như thằng ở trên
+---
+
+# --- STATEFULSET (CÁI POD) ---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+spec:
+  serviceName: "minio" # <--- Gắn với Service Headless (Service 1)
+  replicas: 1          # Chạy 1 Pod cho nhẹ
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:RELEASE.2023-09-04T19-57-37Z
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: MINIO_ROOT_USER
+          value: "minioadmin"
+        - name: MINIO_ROOT_PASSWORD
+          value: "minioadmin"
+        command: ["minio"]
+        # Chạy chế độ server đơn giản
+        args: ["server", "/data", "--console-address", ":9001"]
+        ports:
+        - containerPort: 9000
+        - containerPort: 9001
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
