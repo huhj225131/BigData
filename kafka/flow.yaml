@@ -56,6 +56,7 @@ spec:
           - |
             echo "Đang cài thư viện..." && \
             pip install kafka-python && \
+            pip install boto3 && \
             mkdir -p /app && \
             echo "Xong! Đang ngủ chờ code..." && \
             sleep infinity 
