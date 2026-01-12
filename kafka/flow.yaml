@@ -1,0 +1,65 @@
+# --- KHỐI 1: PRODUCER (Dev Mode) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: producer-data
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: producer
+  template:
+    metadata:
+      labels:
+        app: producer
+    spec:
+      containers:
+      - name: python
+        image: python:3.9-slim
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Đang cài thư viện..." && \
+            pip install kafka-python && \
+            mkdir -p /app && \
+            echo "Xong! Đang ngủ chờ code..." && \
+            sleep infinity
+        # QUAN TRỌNG: Bỏ phần volumeMounts và volumes đi
+        # Để thư mục /app trắng tinh, cho phép ghi đè thoải mái
+        env:
+        - name: KAFKA_BROKER
+          value: "kafka-0.kafka-service.kafka.svc.cluster.local:9092"
+
+---
+# --- KHỐI 2: CONSUMER (Dev Mode) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer-logger
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      containers:
+      - name: python
+        image: python:3.9-slim
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Đang cài thư viện..." && \
+            pip install kafka-python && \
+            mkdir -p /app && \
+            echo "Xong! Đang ngủ chờ code..." && \
+            sleep infinity 
+            # Consumer cũng ngủ luôn, để bạn vào chạy tay cho dễ debug
+        env:
+        - name: KAFKA_BROKER
+          value: "kafka-0.kafka-service.kafka.svc.cluster.local:9092"

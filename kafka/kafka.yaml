@@ -1,23 +1,62 @@
+# 1. ConfigMap: Chuyển toàn bộ biến môi trường từ Docker Compose vào đây
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+  namespace: kafka
+data:
+  # --- Identity & Roles ---
+  CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"  # Đã đổi sang UUID hợp lệ thay vì hungluu415527
+  KAFKA_NODE_ID: "1"
+  KAFKA_PROCESS_ROLES: "broker,controller"
+  
+  # --- Networking ---
+  # Quan trọng: Trong K8s, voter phải trỏ về DNS đầy đủ của Pod
+  KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-0.kafka-service.kafka.svc.cluster.local:9093"
+  
+  KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+  # Advertised: Đây là địa chỉ để client kết nối. 
+  # Nếu dùng nội bộ K3s thì dùng DNS này. 
+  # Nếu muốn port-forward từ máy local, bạn có thể sửa dòng dưới thành: PLAINTEXT://localhost:9092
+  KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-0.kafka-service.kafka.svc.cluster.local:9092"
+  
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+  KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+  
+  # --- Internal & Storage ---
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+  KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+
+---
+# 2. Service Headless (Không thay đổi)
 apiVersion: v1
 kind: Service
 metadata:
-  name: kafka
+  name: kafka-service
+  namespace: kafka
+  labels:
+    app: kafka
 spec:
+  ports:
+  - port: 9092
+    name: plaintext
+  - port: 9093
+    name: controller
+  clusterIP: None
   selector:
     app: kafka
-  ports:
-    - name: client
-      port: 9092
-      targetPort: 9092
-    - name: controller
-      port: 9093
-      targetPort: 9093
+
 ---
+# 3. StatefulSet (Đã tinh gọn cho Confluent Image)
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: kafka
+  namespace: kafka
 spec:
+  serviceName: kafka-service
   replicas: 1
   selector:
     matchLabels:
@@ -29,40 +68,24 @@ spec:
     spec:
       containers:
       - name: kafka
-        image: confluentinc/cp-kafka:7.8.3
+        image: confluentinc/cp-kafka:7.8.3  # Dùng đúng image bạn yêu cầu
         ports:
         - containerPort: 9092
-          name: client
         - containerPort: 9093
-          name: controller
-        env:
-        # --- CẤU HÌNH KRAFT ---
-        # 1. Cluster ID (Bắt buộc phải là Base64 UUID hợp lệ)
-        - name: CLUSTER_ID
-          value: "MkU3OEVBNTcwNTJENDM2Qk"
-          
-        - name: KAFKA_NODE_ID
-          value: "1"
-          
-        - name: KAFKA_PROCESS_ROLES
-          value: "broker,controller"
-          
-        # 2. Sửa voters thành localhost để tự giao tiếp nội bộ ổn định
-        - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-          value: "1@localhost:9093"
-        
-        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
-          value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
-        
-        - name: KAFKA_LISTENERS
-          value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
-
-        # 3. Advertised Listeners trỏ ra Service Kubernetes
-        - name: KAFKA_ADVERTISED_LISTENERS
-          value: "PLAINTEXT://kafka.default.svc.cluster.local:9092"
-        
-        - name: KAFKA_CONTROLLER_LISTENER_NAMES
-          value: "CONTROLLER"
-          
-        - name: KAFKA_LOG_DIRS
-          value: "/var/lib/kafka/data"
+        envFrom:
+        - configMapRef:
+            name: kafka-config
+        # Confluent image tự động chạy script format nếu thấy CLUSTER_ID
+        # nên không cần override 'command' nữa. Rất gọn!
+        volumeMounts:
+        - name: kafka-data
+          mountPath: /var/lib/kafka/data
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: kafka-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
