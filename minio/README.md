@@ -9,7 +9,7 @@ Triển khai MinIO Storage để lưu trữ dữ liệu thô
 minikube kubectl -- create namespace minio
 ```
 
-## 2. Khởi tạo Namespace
+## 2. Triển khai MinIO
 Sau bước này MinIO storage sẽ được khởi tạo thành côngcông
 ```powershell
 # Triển khai StatefulSet và Service cho MinIO
