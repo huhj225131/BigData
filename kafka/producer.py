@@ -6,7 +6,7 @@ import json, sys, time, os
 KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'http://localhost:9092')
 TOPIC_NAME = 'data-stream'
 DATA_FILE = '/app/house_data.json'
-INTERVAL = 5
+INTERVAL = 3
 MAX_RETRY = 10
 
 # --- CÁC HÀM XỬ LÝ ---

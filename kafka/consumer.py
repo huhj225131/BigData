@@ -31,7 +31,6 @@ conf = {
     'heartbeat_interval_ms': 5000,
     'session_timeout_ms': 20000,
     'enable_auto_commit': True,
-    # Quan trọng: trả về định dạng cũ để dễ xử lý trong poll
     'value_deserializer': lambda x: json.loads(x.decode('utf-8')) 
 }
 
@@ -63,7 +62,7 @@ def create_minio_bucket_if_not_exists(s3, bucket_name):
             print(f"❌ Không thể tạo bucket: {e}")
             sys.exit(1)
 
-# [NEW] Hàm upload trực tiếp từ RAM lên MinIO
+# Hàm upload trực tiếp từ RAM lên MinIO
 def upload_batch_to_minio(s3, data_list):
     if not data_list:
         return
@@ -71,7 +70,6 @@ def upload_batch_to_minio(s3, data_list):
     # 1. Tạo tên file theo thời gian
     now = datetime.now()
     folder_path = now.strftime("data/%Y-%m-%d")
-    # Tên file: data/2026-01-12/timestamp_batchsize.json
     file_name = f"{folder_path}/{int(time.time())}_{len(data_list)}.json"
 
     # 2. Chuyển list thành chuỗi JSON (NDJSON - mỗi dòng 1 json)

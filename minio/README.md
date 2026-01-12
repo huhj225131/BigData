@@ -13,7 +13,7 @@ minikube kubectl -- create namespace minio
 Sau bước này MinIO storage sẽ được khởi tạo thành côngcông
 ```powershell
 # Triển khai StatefulSet và Service cho MinIO
-minikube kubectl -- apply -f minio-dev.yaml -n minio
+minikube kubectl -- apply -f config_minio.yaml -n minio
 
 # Kiểm tra trạng thái đến khi Pod báo 'Running'
 minikube kubectl -- get pods -n minio
