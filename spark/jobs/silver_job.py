@@ -1,6 +1,8 @@
 import argparse
 import os
 
+from py4j.protocol import Py4JJavaError
+
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     DoubleType,
@@ -55,7 +57,14 @@ def main():
     parser.add_argument("--pg-user", default=_env("POSTGRES_USER", "postgres"))
     parser.add_argument("--pg-password", default=_env("POSTGRES_PASSWORD", "postgres"))
     parser.add_argument("--pg-table", default=_env("SILVER_PG_TABLE", "fact_house"))
-    parser.add_argument("--pg-mode", choices=["append", "overwrite"], default=_env("SILVER_PG_MODE", "overwrite"))
+    parser.add_argument("--pg-mode", choices=["append", "overwrite"], default=_env("SILVER_PG_MODE", "append"))
+
+    parser.add_argument(
+        "--dedup-strategy",
+        choices=["none", "pg-max-offset"],
+        default=_env("SILVER_DEDUP_STRATEGY", "pg-max-offset"),
+        help="How to avoid reprocessing old Bronze data. 'pg-max-offset' uses fact_house in Postgres as state.",
+    )
 
     args = parser.parse_args()
 
@@ -107,7 +116,7 @@ def main():
         }
     )
 
-    # Dedup by Kafka identity
+    # Dedup within this batch by Kafka identity
     df = df.dropDuplicates(["topic", "partition", "offset"])
 
     normalized = F.regexp_replace(
@@ -139,8 +148,38 @@ def main():
 
     df = df.withColumn("created_at", created_at)
 
-    # Final output schema (drop Kafka metadata + dt)
-    df = df.select(
+    # Optional incremental filter: if Postgres fact table already has offsets,
+    # only process records with offset > max(offset) per (topic, partition).
+    if args.write_postgres and args.pg_mode == "append" and args.dedup_strategy == "pg-max-offset":
+        def _quote_ident(name: str) -> str:
+            return '"' + name.replace('"', '""') + '"'
+
+        def _quote_table(ident: str) -> str:
+            parts = [p for p in ident.split(".") if p]
+            return ".".join(_quote_ident(p) for p in parts) if parts else _quote_ident(ident)
+
+        table_expr = _quote_table(args.pg_table)
+        max_offset_query = (
+            f"(SELECT {_quote_ident('topic')} AS topic, {_quote_ident('partition')} AS partition, "
+            f"MAX({_quote_ident('offset')}) AS max_offset "
+            f"FROM {table_expr} GROUP BY {_quote_ident('topic')}, {_quote_ident('partition')}) t"
+        )
+
+        props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}
+        try:
+            state = spark.read.jdbc(url=args.pg_url, table=max_offset_query, properties=props)
+
+            df = (
+                df.join(state, on=["topic", "partition"], how="left")
+                .where((F.col("max_offset").isNull()) | (F.col("offset") > F.col("max_offset")))
+                .drop("max_offset")
+            )
+        except Py4JJavaError:
+            # Table doesn't exist yet (first run) or schema mismatch: treat as no state.
+            pass
+
+    # Silver lake schema: keep it clean (no Kafka metadata)
+    df_silver = df.select(
         F.col("created_at"),
         F.col("id"),
         F.col("price"),
@@ -152,11 +191,27 @@ def main():
         F.col("condition"),
     )
 
-    df.write.mode("append").parquet(silver_path)
+    df_silver.write.mode("append").parquet(silver_path)
 
     if args.write_postgres:
+        # Postgres fact table: keep Kafka identity columns to support incremental processing.
+        df_fact = df.select(
+            F.col("topic"),
+            F.col("partition"),
+            F.col("offset"),
+            F.col("created_at"),
+            F.col("id"),
+            F.col("price"),
+            F.col("sqft"),
+            F.col("bedrooms"),
+            F.col("bathrooms"),
+            F.col("location"),
+            F.col("year_built"),
+            F.col("condition"),
+        )
+
         props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}
-        df.write.mode(args.pg_mode).jdbc(url=args.pg_url, table=args.pg_table, properties=props)
+        df_fact.write.mode(args.pg_mode).jdbc(url=args.pg_url, table=args.pg_table, properties=props)
 
     spark.stop()
 

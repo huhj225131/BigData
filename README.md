@@ -125,13 +125,18 @@ Lưu ý: Nếu bạn vừa sửa code trên máy local, hãy `kubectl cp` lại 
 kubectl -n spark exec spark-runner -- sh -c "MINIO_ENDPOINT=http://minio.minio.svc.cluster.local:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 /opt/project/jobs/silver_job.py --bucket house-lake --input-format json"
 ```
 
+Lưu ý: Silver ghi vào MinIO bằng mode `append`. Nếu bạn rerun nhiều lần mà không xoá `silver/` thì dữ liệu Silver sẽ bị trùng.
+
 ### 4.3 (Tuỳ chọn) Run Silver và ghi thêm vào Postgres để visualize (bảng `fact_house`)
 
 ```powershell
 kubectl -n spark exec spark-runner -- sh -c "MINIO_ENDPOINT=http://minio.minio.svc.cluster.local:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.7.4 /opt/project/jobs/silver_job.py --bucket house-lake --input-format json --write-postgres --pg-url jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse --pg-user postgres --pg-password postgres --pg-table fact_house"
 ```
 
-Mặc định `fact_house` ghi mode `overwrite` để rerun demo không bị trùng. Nếu muốn tích luỹ: thêm `--pg-mode append`.
+Mặc định `fact_house` ghi mode `append`.
+
+- Tránh xử lý lại Bronze khi rerun: giữ `--write-postgres` và dùng `--dedup-strategy pg-max-offset` (mặc định). Job sẽ đọc `MAX(offset)` theo `(topic, partition)` từ `fact_house` và chỉ xử lý record mới.
+- Backfill/reset (làm lại từ đầu): xoá prefix `silver/` trên MinIO và chạy lại với `--pg-mode overwrite` (hoặc drop table `fact_house`), sau đó mới rerun các bước Gold/ML.
 
 ## 5) Spark Gold (Silver → Gold + Postgres)
 

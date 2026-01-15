@@ -1,6 +1,6 @@
 # Spark
 
-README này ưu tiên cách chạy Spark **trong Kubernetes** (Minikube) bằng pod `spark-runner`.
+Chạy Spark **trong Kubernetes** (Minikube) bằng pod `spark-runner`.
 
 ## 0) Tổng quan
 
@@ -33,7 +33,7 @@ kubectl cp .\spark\jobs\silver_job.py -n spark "spark-runner:/opt/project/jobs/s
 kubectl cp .\spark\jobs\gold_job.py -n spark "spark-runner:/opt/project/jobs/gold_job.py"
 ```
 
-Ghi chú quan trọng: nếu bạn sửa job code trên máy local, cần `kubectl cp` lại vào pod, nếu không pod sẽ chạy bản cũ.
+Ghi chú quan trọng: nếu sửa job code trên máy local, cần `kubectl cp` lại vào pod, nếu không pod sẽ chạy bản cũ.
 
 ## 3) Run Silver (Bronze → Silver)
 
@@ -41,11 +41,18 @@ Ghi chú quan trọng: nếu bạn sửa job code trên máy local, cần `kubec
 kubectl -n spark exec spark-runner -- sh -c "MINIO_ENDPOINT=http://minio.minio.svc.cluster.local:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 /opt/project/jobs/silver_job.py --bucket house-lake --input-format json"
 ```
 
+Lưu ý: Silver ghi vào MinIO bằng mode `append`. Nếu cần rerun sạch (không trùng dữ liệu), hãy xoá prefix `silver/` trên MinIO trước.
+
 ### 3.1 (Optional) Silver → Postgres (table `fact_house`)
 
 ```powershell
-kubectl -n spark exec spark-runner -- sh -c "MINIO_ENDPOINT=http://minio.minio.svc.cluster.local:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.7.4 /opt/project/jobs/silver_job.py --bucket house-lake --input-format json --write-postgres --pg-url jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse --pg-user postgres --pg-password postgres --pg-table fact_house"
+kubectl -n spark exec spark-runner -- sh -c "MINIO_ENDPOINT=http://minio.minio.svc.cluster.local:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.7.4 /opt/project/jobs/silver_job.py --bucket house-lake --input-format json --write-postgres --pg-url jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse --pg-user postgres --pg-password postgres --pg-table fact_house --pg-mode append --dedup-strategy pg-max-offset"
 ```
+
+Ghi chú:
+
+- Mặc định job sẽ dedup theo Kafka offsets dựa trên state trong Postgres (`pg-max-offset`) để tránh xử lý lại Bronze.
+- Backfill/reset: drop table `fact_house` (hoặc chạy `--pg-mode overwrite`) và xoá `silver/` nếu bạn muốn làm lại Silver từ đầu.
 
 ## 4) Run Gold (Silver → Gold) + Postgres
 
