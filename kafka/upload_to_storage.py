@@ -1,48 +1,67 @@
+import os
 import traceback
+from typing import Optional
+
 import boto3
 from botocore.exceptions import NoCredentialsError
-import os
-# Set your MinIO credentials and endpoint
-minio_access_key = "minioadmin"
-minio_secret_key = "minioadmin"
-minio_endpoint = os.getenv("MINIO_ENDPOINT")
-source_bucket_name = 'hunngluu-test-bucket-1'
-destination_bucket_name = 'hungluu-test-bucket-2'
 
-# FUNCTIONS
-# =========
 
-# Create an S3 client
-def get_s3_client():
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    value = os.getenv(name)
+    return value if value not in (None, "") else default
+
+
+def get_minio_config():
+    """Load MinIO config from env vars with sensible defaults.
+
+    Env:
+      - MINIO_ENDPOINT (e.g. http://minio.minio.svc.cluster.local:9000)
+      - MINIO_ACCESS_KEY
+      - MINIO_SECRET_KEY
+    """
+    return {
+        "endpoint": _env("MINIO_ENDPOINT", "http://minio.minio.svc.cluster.local:9000"),
+        "access_key": _env("MINIO_ACCESS_KEY", "minioadmin"),
+        "secret_key": _env("MINIO_SECRET_KEY", "minioadmin"),
+    }
+
+def get_s3_client(
+    endpoint_url: Optional[str] = None,
+    access_key: Optional[str] = None,
+    secret_key: Optional[str] = None,
+):
+    """Create a boto3 S3 client for MinIO."""
     try:
+        cfg = get_minio_config()
         s3 = boto3.client(
-            's3', 
-            endpoint_url=minio_endpoint, 
-            aws_access_key_id=minio_access_key,
-            aws_secret_access_key=minio_secret_key
+            "s3",
+            endpoint_url=endpoint_url or cfg["endpoint"],
+            aws_access_key_id=access_key or cfg["access_key"],
+            aws_secret_access_key=secret_key or cfg["secret_key"],
         )
-        return s3 
+        return s3
     except NoCredentialsError:
         print("Credentials not available")
     except Exception as e:
         print(f"Exception occurred while creating S3 client!\n{e}")
         traceback.print_exc()
 
-# Create a bucket if not exists
-def create_minio_bucket(bucket_name):
-    # Create a bucket in MinIO
+def create_minio_bucket(bucket_name: str, s3=None):
+    """Create a bucket if it doesn't exist."""
     try:
-        s3 = get_s3_client()
+        s3 = s3 or get_s3_client()
+        if not s3:
+            raise RuntimeError("Failed to create S3 client")
 
-        # Check if the bucket already exists
-        response = s3.list_buckets()
-        existing_buckets = [bucket['Name'] for bucket in response.get('Buckets', [])]
+        # Prefer head_bucket (cheap) over list_buckets.
+        try:
+            s3.head_bucket(Bucket=bucket_name)
+            return
+        except Exception:
+            pass
 
-        if bucket_name in existing_buckets:
-            print(f"Bucket {bucket_name} already exists")
-        else:
-            s3.create_bucket(Bucket=bucket_name)
-            print(f"Bucket {bucket_name} created successfully")
+        s3.create_bucket(Bucket=bucket_name)
+        print(f"Bucket {bucket_name} created successfully")
     except NoCredentialsError:
         print("Credentials not available")
 
@@ -95,7 +114,7 @@ def upload_to_s3(file_path, bucket_name, object_name):
     try:
         s3 = get_s3_client()
         # Create bucket if not exists
-        create_minio_bucket(bucket_name)
+        create_minio_bucket(bucket_name, s3=s3)
         # Upload the file to s3 bucket
         s3.upload_file(file_path, bucket_name, object_name)
         print(f"File uploaded successfully to {bucket_name}/{object_name}")
@@ -114,24 +133,10 @@ def download_from_s3(source_bucket_name, object_name, local_file_path):
     except NoCredentialsError:
         print("Credentials not available")
 
-# ACTION
-# ======
-
-# 1. Create MinIO bucket
-create_minio_bucket(source_bucket_name)
-
-# 2. Upload to MinIO
-# Note: we copied our sample data (local) /opt/sample_data/sample_data.csv in Dockerfile.etl
-upload_to_s3('./house_data.csv', source_bucket_name, 'sample_data/house_data.csv')
-
-# 3. Check if an object exists (on source bucket)
-check_object_exists(source_bucket_name, 'sample_data/house_data.csv')
-
-# 4. Copy object from one bucket to another
-# copy_object(source_bucket_name, 'sample_data/sample_data.csv', destination_bucket_name, 'sample_data/sample_data.csv')
-
-# 5. Download from MinIO
-# download_from_s3(source_bucket_name, 'sample_data/sample_data.csv', './sample_data1.csv')
-
-# 6. Delete object from MinIO bucket
-# delete_object(source_bucket_name, 'sample_data/sample_data.csv')
+if __name__ == "__main__":
+    # Small connectivity smoke-check (optional)
+    bucket = _env("MINIO_BUCKET", "hungluu-test-bucket")
+    s3 = get_s3_client()
+    if s3:
+        create_minio_bucket(bucket, s3=s3)
+        print("MinIO client OK")

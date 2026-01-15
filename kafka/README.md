@@ -1,65 +1,80 @@
-# Triển khai Kafka trên Minikube, tạo luồng dữ liệu streaming
-Hiện tại đang cấu hình để Producer sẽ gửi 1 dòng dữ liệu trong 3 giây, Consumer sẽ đóng gói batch 10 tin nhắn 1 để gửi cho MinIO
-## 1. Triển khai Kafka Broker
-### Tạo namespace
-```powershell
-# Tạo namespace chuyên biệt cho hệ thống lưu trữ
-minikube kubectl -- create namespace kafka
-```
-### Triển khai broker
-```powershell
-# Triển khai
-minikube kubectl -- apply -f kafka.yaml -n kafka
-```
-Sau khi triển khai, địa chỉ kết nối trong cluster kubernets sẽ là 
-```text
-kafka-0.kafka-service.kafka.svc.cluster.local:9092
-```
-## 2. Tạo producer và consumer
-### Triển khai deployment producer-data và consumer-logger
-```powershell
-# Triển khai
-minikube kubectl -- apply -f flow.yaml -n kafka
-```
+# Kafka (Kubernetes)
+
+Mục tiêu:
+
+- Deploy Kafka lên Minikube
+- Chạy producer/consumer (dev mode)
+- Consumer ghi dữ liệu Bronze lên MinIO (bucket `house-lake`, prefix `bronze/`)
+
+Ghi chú: nếu `kubectl` chưa trỏ đúng context Minikube, bạn có thể thay `kubectl` bằng `minikube kubectl --`.
+
+## 1) Deploy Kafka broker
+
+Chạy từ thư mục root `BigData`:
 
 ```powershell
-# Kiểm tra trạng thái
-kubectl get pods -n kafka
+kubectl create namespace kafka 2>$null
+kubectl apply -n kafka -f kafka/kafka.yaml
+kubectl -n kafka get pods -w
 ```
-### Ghi các file code và dữ liệu vào Pod 
 
-Vì chúng ta đang sử dụng image Python mặc định (trống), cần phải đẩy file thực thi và dữ liệu đầu vào từ máy local vào bên trong Pod để có thể chạy được luồng streaming.
-
-#### Đẩy code cho Consumer 
-
+## 2) Deploy producer + consumer (dev mode)
 
 ```powershell
-# Lấy tên Pod Consumer
-$POD = (minikube kubectl -- get pods -n kafka -l app=consumer -o jsonpath='{.items[0].metadata.name}')
-# Copy file vào Pod (Ghi đè nếu đã tồn tại)
-minikube kubectl -- cp consumer.py kafka/${POD}:/app/consumer.py
+kubectl apply -n kafka -f kafka/flow.yaml
+kubectl -n kafka get pods -w
 ```
-#### Đẩy code và dữ liệu vào Pod Producer
 
+## 3) Copy code vào pods
 
-
+Lấy pod names:
 
 ```powershell
-# Truy vấn và lưu tên Pod vào biến $POD_PRO
-$POD= (minikube kubectl -- get pods -n kafka -l app=producer -o jsonpath='{.items[0].metadata.name}')
-# Đẩy file logic xử lý gửi tin
-minikube kubectl -- cp producer.py kafka/${POD}:/app/producer.py
-# Đẩy file dữ liệu thô (house_data.json) dùng để mô phỏng streaming
-minikube kubectl -- cp house_data.json kafka/${POD}:/app/house_data.json
+$POD_CON = (kubectl get pods -n kafka -l app=consumer -o jsonpath='{.items[0].metadata.name}')
+$POD_PRO = (kubectl get pods -n kafka -l app=producer -o jsonpath='{.items[0].metadata.name}')
 ```
-### Chạy producer và consumer
-Mở cửa sổ thứ nhất và chạy lệnh sau. Consumer sẽ bắt đầu kết nối với Kafka và sẵn sàng ghi file lên MinIO khi đủ 10 tin nhắn.
+
+Nếu bạn đang đứng ở thư mục root `BigData`:
+
 ```powershell
-# Chạy Consumer trong Pod
-minikube kubectl -- exec -it deployment/consumer-logger -n kafka -- python /app/consumer.py
+kubectl cp .\kafka\consumer.py -n kafka "$POD_CON`:/app/consumer.py"
+kubectl cp .\kafka\upload_to_storage.py -n kafka "$POD_CON`:/app/upload_to_storage.py"
+
+kubectl cp .\kafka\producer.py -n kafka "$POD_PRO`:/app/producer.py"
+kubectl cp .\kafka\house_data.json -n kafka "$POD_PRO`:/app/house_data.json"
 ```
-Mở cửa sổ thứ hai và chạy lệnh sau. Producer sẽ đọc file house_data.json và gửi dữ liệu vào Kafka mỗi 3 giây.
+
+Nếu bạn đang đứng sẵn trong `BigData\kafka` thì copy như sau (không có prefix `kafka\`):
+
 ```powershell
-# Chạy Producer trong Pod
-minikube kubectl -- exec -it deployment/producer-data -n kafka -- python /app/producer.py
+kubectl cp .\consumer.py -n kafka "$POD_CON`:/app/consumer.py"
+kubectl cp .\upload_to_storage.py -n kafka "$POD_CON`:/app/upload_to_storage.py"
+
+kubectl cp .\producer.py -n kafka "$POD_PRO`:/app/producer.py"
+kubectl cp .\house_data.json -n kafka "$POD_PRO`:/app/house_data.json"
 ```
+
+## 4) Run consumer + producer
+
+Consumer (Terminal 1):
+
+```powershell
+kubectl -n kafka exec -it deploy/consumer-logger -- python /app/consumer.py
+```
+
+Producer (Terminal 2):
+
+```powershell
+kubectl -n kafka exec -it deploy/producer-data -- python /app/producer.py
+```
+
+Dừng bằng `Ctrl + C`.
+
+## 5) Verify Bronze on MinIO
+
+Mở MinIO Console → bucket `house-lake` → prefix `bronze/`.
+
+Nếu không thấy file mới:
+
+- Check log consumer: `kubectl -n kafka logs deploy/consumer-logger --tail=200`
+- Check connectivity: `kubectl -n kafka exec -it deploy/consumer-logger -- sh`
