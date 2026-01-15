@@ -1,0 +1,142 @@
+# --- ConfigMap: Cấu hình cho Spark Streaming ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-streaming-config
+  namespace: kafka
+data:
+  KAFKA_BROKER: "kafka-service.kafka.svc.cluster.local:9092"
+  KAFKA_TOPIC: "data-stream"
+  POSTGRES_HOST: "postgres.postgres.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "house_warehouse"
+  POSTGRES_USER: "postgres"
+  POSTGRES_TABLE: "house_data_speed"
+  CHECKPOINT_DIR: "/checkpoint"
+
+---
+# --- Secret: PostgreSQL Password ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: kafka
+type: Opaque
+stringData:
+  password: "postgres"
+
+---
+# --- PersistentVolumeClaim: Lưu Spark Checkpoint ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-checkpoint-pvc
+  namespace: kafka
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+# --- Deployment: Spark Streaming (Dev Mode - Chờ code) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-streaming
+  namespace: kafka
+  labels:
+    app: spark-streaming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-streaming
+  template:
+    metadata:
+      labels:
+        app: spark-streaming
+    spec:
+      containers:
+      - name: spark
+        image: apache/spark:3.5.0
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            echo "✅ Spark pod sẵn sàng"
+            echo "📁 Chờ copy code vào /app/stream.py"
+            echo "🔧 Sau khi copy, chạy lệnh:"
+            echo "   spark-submit --master local[2] --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.1 /app/stream.py"
+            mkdir -p /app
+            sleep infinity
+        
+        env:
+        - name: KAFKA_BROKER
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: KAFKA_BROKER
+        - name: KAFKA_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: KAFKA_TOPIC
+        - name: POSTGRES_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: POSTGRES_HOST
+        - name: POSTGRES_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: POSTGRES_PORT
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        - name: POSTGRES_TABLE
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: POSTGRES_TABLE
+        - name: CHECKPOINT_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: spark-streaming-config
+              key: CHECKPOINT_DIR
+        
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        - name: checkpoint
+          mountPath: /checkpoint
+        
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+      
+      volumes:
+      - name: app-code
+        emptyDir: {}
+      - name: checkpoint
+        persistentVolumeClaim:
+          claimName: spark-checkpoint-pvc
+      
+      restartPolicy: Always
