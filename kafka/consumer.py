@@ -1,91 +1,46 @@
+import json
+import os
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+
 from kafka import KafkaConsumer
-from kafka.errors import NoBrokersAvailable
-import json, time, sys, os
-import traceback
-import boto3
-from botocore.exceptions import NoCredentialsError
-from datetime import datetime
 
-# --- CẤU HÌNH ---
-# MinIO
-minio_access_key = "minioadmin"
-minio_secret_key = "minioadmin"
-minio_endpoint = 'http://minio.minio.svc.cluster.local:9000' # Default cho test
-bucket_name = 'hungluu-test-bucket' # Bucket đích để lưu data
+from upload_to_storage import create_minio_bucket, upload_to_s3
 
-# Kafka
-KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'localhost:9092')
-TOPIC_NAME = 'data-stream'
-GROUP_ID = "minio_archiver" # Đặt tên group riêng cho việc lưu trữ
-MAX_RETRY = 10
 
-# Batch Config
-BATCH_SIZE = 10       # Số lượng tin nhắn tối đa trong 1 file
-BATCH_TIMEOUT = 30    # Thời gian tối đa (giây) chờ gom batch
+def _env(name: str, default: str) -> str:
+    v = os.getenv(name)
+    return v if v not in (None, "") else default
 
-# Config cho kafka-python
+
+# --- CẤU HÌNH (ENV-FIRST) ---
+KAFKA_BROKER = _env("KAFKA_BROKER", "localhost:9092")
+TOPIC_NAME = _env("TOPIC_NAME", "data-stream")
+GROUP_ID = _env("GROUP_ID", "bronze_archiver")
+MAX_RETRY = int(_env("MAX_RETRY", "10"))
+
+MINIO_BUCKET = _env("MINIO_BUCKET", "hungluu-test-bucket")
+BRONZE_PREFIX = _env("BRONZE_PREFIX", "bronze")
+
+# batch: yêu cầu 100-500 msgs hoặc 1-5 phút
+BATCH_SIZE = int(_env("BATCH_SIZE", "200"))
+BATCH_TIMEOUT_SECONDS = int(_env("BATCH_TIMEOUT_SECONDS", "180"))
+
+# output
+OUTPUT_FORMAT = _env("OUTPUT_FORMAT", "jsonl").lower()  # jsonl|parquet (parquet optional)
+
+
 conf = {
-    'bootstrap_servers': [KAFKA_BROKER],
-    'group_id': GROUP_ID,
-    'auto_offset_reset': 'earliest',
-    'heartbeat_interval_ms': 5000,
-    'session_timeout_ms': 20000,
-    'enable_auto_commit': True,
-    'value_deserializer': lambda x: json.loads(x.decode('utf-8')) 
+    "bootstrap_servers": [KAFKA_BROKER],
+    "group_id": GROUP_ID,
+    "auto_offset_reset": "earliest",
+    "heartbeat_interval_ms": 5000,
+    "session_timeout_ms": 20000,
+    "enable_auto_commit": True,
+    "value_deserializer": lambda x: json.loads(x.decode("utf-8")),
 }
-
-# --- HELPER FUNCTIONS ---
-
-def get_s3_client():
-    try:
-        s3 = boto3.client(
-            's3', 
-            endpoint_url=minio_endpoint, 
-            aws_access_key_id=minio_access_key,
-            aws_secret_access_key=minio_secret_key
-        )
-        return s3 
-    except Exception as e:
-        print(f"Lỗi tạo S3 client: {e}")
-        return None
-
-def create_minio_bucket_if_not_exists(s3, bucket_name):
-    try:
-        s3.head_bucket(Bucket=bucket_name)
-        print(f"✓ Bucket {bucket_name} đã tồn tại.")
-    except:
-        print(f"Bucket {bucket_name} chưa có. Đang tạo...")
-        try:
-            s3.create_bucket(Bucket=bucket_name)
-            print(f"✓ Đã tạo bucket {bucket_name}")
-        except Exception as e:
-            print(f"❌ Không thể tạo bucket: {e}")
-            sys.exit(1)
-
-# Hàm upload trực tiếp từ RAM lên MinIO
-def upload_batch_to_minio(s3, data_list):
-    if not data_list:
-        return
-
-    # 1. Tạo tên file theo thời gian
-    now = datetime.now()
-    folder_path = now.strftime("data/%Y-%m-%d")
-    file_name = f"{folder_path}/{int(time.time())}_{len(data_list)}.json"
-
-    # 2. Chuyển list thành chuỗi JSON (NDJSON - mỗi dòng 1 json)
-    body_content = "\n".join([json.dumps(msg) for msg in data_list])
-    
-    # 3. Upload dùng put_object
-    try:
-        s3.put_object(
-            Bucket=bucket_name,
-            Key=file_name,
-            Body=body_content.encode('utf-8'),
-            ContentType='application/json'
-        )
-        print(f"✅ [UPLOAD] Đã lưu {len(data_list)} tin nhắn vào: {file_name}")
-    except Exception as e:
-        print(f"❌ Lỗi upload MinIO: {e}")
 
 def create_comsumer():
     for attempt in range(1, 1 + MAX_RETRY):
@@ -100,59 +55,127 @@ def create_comsumer():
     print("❌ Không tạo được consumer")
     sys.exit(1)
 
-# --- MAIN LOGIC ---
+def _bronze_key(topic: str, partition: int, min_offset: int, max_offset: int, count: int, ext: str) -> str:
+    now = datetime.now(timezone.utc)
+    dt = now.strftime("%Y-%m-%d")
+    hour = now.strftime("%H")
+    ts = int(now.timestamp())
+    return (
+        f"{BRONZE_PREFIX}/dt={dt}/hour={hour}/topic={topic}/partition={partition}/"
+        f"{ts}_offset={min_offset}-{max_offset}_count={count}.{ext}"
+    )
 
-def process_messages(consumer, s3):
-    buffer = []
-    last_upload_time = time.time()
-    
-    print(" Bắt đầu nhận tin nhắn và gom Batch...")
-    
+
+def _write_batch_local(records: list[dict], output_format: str) -> tuple[str, str]:
+    if output_format == "parquet":
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+        except Exception as e:
+            raise RuntimeError(
+                "OUTPUT_FORMAT=parquet requires pyarrow. "
+                "Install pyarrow or set OUTPUT_FORMAT=jsonl"
+            ) from e
+
+        # keep schema stable: store payload as JSON string
+        rows = []
+        for r in records:
+            rows.append(
+                {
+                    "ingest_time_utc": r.get("ingest_time_utc"),
+                    "topic": r.get("topic"),
+                    "partition": r.get("partition"),
+                    "offset": r.get("offset"),
+                    "kafka_timestamp_ms": r.get("kafka_timestamp_ms"),
+                    "payload_json": json.dumps(r.get("payload"), ensure_ascii=False),
+                }
+            )
+        table = pa.Table.from_pylist(rows)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".parquet")
+        tmp.close()
+        pq.write_table(table, tmp.name)
+        return tmp.name, "parquet"
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl", mode="w", encoding="utf-8")
+    with tmp as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return tmp.name, "jsonl"
+
+
+def _flush_batch(records: list[dict]):
+    if not records:
+        return
+
+    topic = records[0]["topic"]
+    partition = records[0]["partition"]
+    offsets = [r["offset"] for r in records]
+    key = _bronze_key(topic, partition, min(offsets), max(offsets), len(records), "jsonl" if OUTPUT_FORMAT != "parquet" else "parquet")
+
+    local_path, ext = _write_batch_local(records, OUTPUT_FORMAT)
+    try:
+        upload_to_s3(local_path, MINIO_BUCKET, key)
+        print(f"✅ [BRONZE] Uploaded {len(records)} records -> s3://{MINIO_BUCKET}/{key}")
+    finally:
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+
+
+def process_messages(consumer):
+    buffer_by_partition: dict[tuple[str, int], list[dict]] = {}
+    last_flush_time_by_partition: dict[tuple[str, int], float] = {}
+
+    print("Bắt đầu đọc Kafka và gom batch (bronze)...")
+
     try:
         while True:
-            # Dùng poll thay vì vòng lặp for để không bị block
-            # Timeout 1000ms: mỗi 1 giây sẽ nhả ra để check logic time
-            msg_pack = consumer.poll(timeout_ms=1000) 
-            
-            # poll trả về dict {TopicPartition: [List records]}
+            msg_pack = consumer.poll(timeout_ms=1000)
+
             for tp, messages in msg_pack.items():
                 for msg in messages:
-                    # msg.value đã được deserialize tự động nhờ config ở trên
-                    val = msg.value 
-                    buffer.append(val)
-                    print(f" + Nhận msg (Buffer: {len(buffer)}/{BATCH_SIZE})")
+                    k = (msg.topic, msg.partition)
+                    buffer = buffer_by_partition.setdefault(k, [])
+                    last_flush_time_by_partition.setdefault(k, time.time())
 
-            # --- Logic kiểm tra Batch ---
-            current_time = time.time()
-            is_full = len(buffer) >= BATCH_SIZE
-            is_timeout = (current_time - last_upload_time) >= BATCH_TIMEOUT and len(buffer) > 0
+                    buffer.append(
+                        {
+                            "ingest_time_utc": datetime.now(timezone.utc).isoformat(),
+                            "topic": msg.topic,
+                            "partition": msg.partition,
+                            "offset": msg.offset,
+                            "kafka_timestamp_ms": msg.timestamp,
+                            "payload": msg.value,
+                        }
+                    )
 
-            if is_full or is_timeout:
-                trigger_reason = "FULL" if is_full else "TIMEOUT"
-                print(f"⚡ Trigger Upload [{trigger_reason}]...")
-                
-                upload_batch_to_minio(s3, buffer)
-                
-                # Reset
-                buffer = []
-                last_upload_time = current_time
+            now = time.time()
+            for k, buffer in list(buffer_by_partition.items()):
+                if not buffer:
+                    continue
+
+                is_full = len(buffer) >= BATCH_SIZE
+                is_timeout = (now - last_flush_time_by_partition.get(k, now)) >= BATCH_TIMEOUT_SECONDS
+                if is_full or is_timeout:
+                    reason = "FULL" if is_full else "TIMEOUT"
+                    print(f"⚡ Flush [{reason}] {k} ({len(buffer)} records)")
+                    _flush_batch(buffer)
+                    buffer_by_partition[k] = []
+                    last_flush_time_by_partition[k] = now
 
     except KeyboardInterrupt:
         print("\nĐang dừng...")
     finally:
-        if buffer:
-            print("Lưu nốt dữ liệu còn lại trong buffer...")
-            upload_batch_to_minio(s3, buffer)
+        for k, buffer in buffer_by_partition.items():
+            if buffer:
+                print(f"Flush nốt buffer {k} ({len(buffer)} records)")
+                _flush_batch(buffer)
         consumer.close()
 
 if __name__ == "__main__":
-    # 1. Kết nối S3 & Kafka
-    s3 = get_s3_client()
-    if not s3: sys.exit(1)
-    
-    create_minio_bucket_if_not_exists(s3, bucket_name)
-    
+    # Ensure bucket exists (will use MINIO_* env)
+    create_minio_bucket(MINIO_BUCKET)
+
     consumer = create_comsumer()
-    
-    # 2. Chạy vòng lặp xử lý
-    process_messages(consumer, s3)
+    process_messages(consumer)

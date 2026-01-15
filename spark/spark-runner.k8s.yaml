@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spark
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spark-runner
+  namespace: spark
+  labels:
+    app: spark-runner
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 0
+  containers:
+    - name: spark-runner
+      image: apache/spark:3.5.1
+      command: ["sh", "-lc", "sleep infinity"]

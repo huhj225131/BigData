@@ -57,6 +57,7 @@ spec:
             echo "Đang cài thư viện..." && \
             pip install kafka-python && \
             pip install boto3 && \
+            pip install pyarrow && \
             mkdir -p /app && \
             echo "Xong! Đang ngủ chờ code..." && \
             sleep infinity 
@@ -64,3 +65,15 @@ spec:
         env:
         - name: KAFKA_BROKER
           value: "kafka-0.kafka-service.kafka.svc.cluster.local:9092"
+        - name: MINIO_ENDPOINT
+          value: "http://minio.minio.svc.cluster.local:9000"
+        - name: MINIO_BUCKET
+          value: "house-lake"
+        - name: BRONZE_PREFIX
+          value: "bronze"
+        - name: BATCH_SIZE
+          value: "200"
+        - name: BATCH_TIMEOUT_SECONDS
+          value: "180"
+        - name: OUTPUT_FORMAT
+          value: "jsonl"
