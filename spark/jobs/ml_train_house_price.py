@@ -56,6 +56,7 @@ def main() -> None:
     df = (
         df.select(
             F.col("id"),
+            F.col("created_at"),
             F.col("price").cast("double").alias("label"),
             F.col("sqft").cast("double").alias("sqft"),
             F.col("bedrooms").cast("double").alias("bedrooms"),
@@ -63,7 +64,6 @@ def main() -> None:
             F.col("year_built").cast("double").alias("year_built"),
             F.col("location").alias("location"),
             F.col("condition").alias("condition"),
-            F.col("dt"),
         )
         .dropna(subset=["label", "location", "year_built"])
         .fillna({"sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown"})

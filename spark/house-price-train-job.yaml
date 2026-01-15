@@ -85,19 +85,19 @@ data:
         df = spark.read.parquet(silver_path)
 
         df = (
-            df.select(
-                F.col("id"),
-                F.col("price").cast("double").alias("label"),
-                F.col("sqft").cast("double").alias("sqft"),
-                F.col("bedrooms").cast("double").alias("bedrooms"),
-                F.col("bathrooms").cast("double").alias("bathrooms"),
-                F.col("year_built").cast("double").alias("year_built"),
-                F.col("location"),
-                F.col("condition"),
-                F.col("dt"),
-            )
-            .dropna(subset=["label", "location", "year_built"])
-            .fillna({"sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown"})
+          df.select(
+            F.col("created_at"),
+            F.col("id"),
+            F.col("price").cast("double").alias("label"),
+            F.col("sqft").cast("double").alias("sqft"),
+            F.col("bedrooms").cast("double").alias("bedrooms"),
+            F.col("bathrooms").cast("double").alias("bathrooms"),
+            F.col("year_built").cast("double").alias("year_built"),
+            F.col("location"),
+            F.col("condition"),
+          )
+          .dropna(subset=["label", "location", "year_built"])
+          .fillna({"sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown"})
         )
 
         location_indexer = StringIndexer(inputCol="location", outputCol="location_idx", handleInvalid="keep")

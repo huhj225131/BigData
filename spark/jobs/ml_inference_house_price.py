@@ -25,12 +25,6 @@ def main() -> None:
         help="Full s3a:// path to a saved Spark PipelineModel. Defaults to s3a://<bucket>/models/house_price/latest",
     )
 
-    parser.add_argument(
-        "--dt",
-        default=_env("INFER_DT", ""),
-        help="Optional dt filter (YYYY-MM-DD). If not set, scores all available silver partitions.",
-    )
-
     parser.add_argument("--write-postgres", action="store_true")
     parser.add_argument(
         "--pg-url",
@@ -50,14 +44,8 @@ def main() -> None:
 
     df = spark.read.parquet(silver_path)
 
-    if args.dt:
-        df = df.filter(F.col("dt") == F.to_date(F.lit(args.dt)))
-
     df = df.select(
-        F.col("ingest_time_utc"),
-        F.col("topic"),
-        F.col("partition"),
-        F.col("offset"),
+        F.col("created_at"),
         F.col("id"),
         F.col("price").cast("double").alias("actual_price"),
         F.col("sqft").cast("double").alias("sqft"),
@@ -66,7 +54,6 @@ def main() -> None:
         F.col("year_built").cast("double").alias("year_built"),
         F.col("location"),
         F.col("condition"),
-        F.col("dt"),
     )
 
     df = df.dropna(subset=["location", "year_built"]).fillna(
@@ -82,12 +69,8 @@ def main() -> None:
 
     out = (
         scored.select(
-            "ingest_time_utc",
-            "topic",
-            "partition",
-            "offset",
+            "created_at",
             "id",
-            "dt",
             "actual_price",
             F.col("prediction").cast("double").alias("predicted_price"),
         )
@@ -98,7 +81,7 @@ def main() -> None:
 
     # Write to MinIO (gold)
     pred_path = f"s3a://{args.bucket}/{args.gold_prefix}/predictions_house_price/"
-    out.write.mode("append").partitionBy("dt").parquet(pred_path)
+    out.write.mode("append").parquet(pred_path)
 
     if args.write_postgres:
         props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}
