@@ -67,12 +67,6 @@ data:
             help="Full s3a:// path to a saved Spark PipelineModel. Defaults to s3a://<bucket>/models/house_price/latest",
         )
 
-        parser.add_argument(
-            "--dt",
-            default=_env("INFER_DT", ""),
-            help="Optional dt filter (YYYY-MM-DD). If not set, scores all available silver partitions.",
-        )
-
         parser.add_argument("--write-postgres", action="store_true")
         parser.add_argument(
             "--pg-url",
@@ -91,14 +85,8 @@ data:
         silver_path = f"s3a://{args.bucket}/{args.silver_prefix}/"
         df = spark.read.parquet(silver_path)
 
-        if args.dt:
-            df = df.filter(F.col("dt") == F.to_date(F.lit(args.dt)))
-
         df = df.select(
-            F.col("ingest_time_utc"),
-            F.col("topic"),
-            F.col("partition"),
-            F.col("offset"),
+          F.col("created_at"),
             F.col("id"),
             F.col("price").cast("double").alias("actual_price"),
             F.col("sqft").cast("double").alias("sqft"),
@@ -107,7 +95,6 @@ data:
             F.col("year_built").cast("double").alias("year_built"),
             F.col("location"),
             F.col("condition"),
-            F.col("dt"),
         ).dropna(subset=["location", "year_built"]).fillna(
             {"sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown"}
         )
@@ -121,12 +108,8 @@ data:
 
         out = (
             scored.select(
-                "ingest_time_utc",
-                "topic",
-                "partition",
-                "offset",
                 "id",
-                "dt",
+            "created_at",
                 "actual_price",
                 F.col("prediction").cast("double").alias("predicted_price"),
             )
@@ -136,7 +119,7 @@ data:
         )
 
         pred_path = f"s3a://{args.bucket}/{args.gold_prefix}/predictions_house_price/"
-        out.write.mode("append").partitionBy("dt").parquet(pred_path)
+        out.write.mode("append").parquet(pred_path)
 
         if args.write_postgres:
             props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}

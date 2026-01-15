@@ -37,6 +37,13 @@ def main():
     parser.add_argument("--bucket", default=_env("MINIO_BUCKET", "hungluu-test-bucket"))
     parser.add_argument("--bronze-prefix", default=_env("BRONZE_PREFIX", "bronze"))
     parser.add_argument("--silver-prefix", default=_env("SILVER_PREFIX", "silver"))
+    parser.add_argument(
+        "--input-format",
+        choices=["json", "parquet"],
+        default=_env("BRONZE_INPUT_FORMAT", "json"),
+        help="How bronze was written: json (NDJSON) or parquet",
+    )
+
     parser.add_argument("--write-postgres", action="store_true")
     parser.add_argument(
         "--pg-url",
@@ -47,19 +54,8 @@ def main():
     )
     parser.add_argument("--pg-user", default=_env("POSTGRES_USER", "postgres"))
     parser.add_argument("--pg-password", default=_env("POSTGRES_PASSWORD", "postgres"))
-    parser.add_argument("--pg-table", default=_env("SILVER_PG_TABLE", "silver_house"))
-    parser.add_argument(
-        "--pg-mode",
-        choices=["overwrite", "append"],
-        default=_env("SILVER_PG_MODE", "overwrite"),
-        help="How to write Silver into Postgres. overwrite is safest for demo re-runs.",
-    )
-    parser.add_argument(
-        "--input-format",
-        choices=["json", "parquet"],
-        default=_env("BRONZE_INPUT_FORMAT", "json"),
-        help="How bronze was written: json (NDJSON) or parquet",
-    )
+    parser.add_argument("--pg-table", default=_env("SILVER_PG_TABLE", "fact_house"))
+    parser.add_argument("--pg-mode", choices=["append", "overwrite"], default=_env("SILVER_PG_MODE", "overwrite"))
 
     args = parser.parse_args()
 
@@ -73,12 +69,13 @@ def main():
         if "payload" not in df.columns and "payload_json" in df.columns:
             df = df.withColumn("payload", F.from_json(F.col("payload_json"), PAYLOAD_SCHEMA))
     else:
+        # NDJSON files produced by the Kafka bronze consumer
         df = spark.read.json(bronze_path)
 
     if "payload" not in df.columns:
         raise RuntimeError("Bronze data must contain 'payload' struct or 'payload_json' column")
 
-    # Flatten payload
+    # Flatten payload (keep Kafka metadata for dedup, but we will drop them from final output)
     df = df.select(
         F.col("ingest_time_utc"),
         F.col("topic"),
@@ -113,24 +110,53 @@ def main():
     # Dedup by Kafka identity
     df = df.dropDuplicates(["topic", "partition", "offset"])
 
-    df = df.withColumn("dt", F.to_date(F.col("ingest_time_utc")))
-
-    (
-        df.write.mode("append")
-        .partitionBy("dt")
-        .parquet(silver_path)
+    normalized = F.regexp_replace(
+        F.regexp_replace(F.col("ingest_time_utc"), "T", " "),
+        r"(Z|[+-]\d\d:?\d\d)$",
+        "",
     )
+
+    created_ts = F.coalesce(
+        F.to_timestamp(normalized, "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+        F.to_timestamp(normalized, "yyyy-MM-dd HH:mm:ss.SSS"),
+        F.to_timestamp(normalized, "yyyy-MM-dd HH:mm:ss"),
+    )
+
+    created_at_from_ts = F.concat(
+        F.date_format(created_ts, "yyyy-MM-dd HH:mm:ss"),
+        F.lit("."),
+        F.lpad(((F.unix_micros(created_ts) % F.lit(1000000))).cast("string"), 6, "0"),
+    )
+
+    frac = F.regexp_extract(normalized, r"\\.(\\d{1,6})$", 1)
+    base = F.regexp_replace(normalized, r"\\.\\d{1,6}$", "")
+    created_at_fallback = F.when(
+        frac != "",
+        F.concat(base, F.lit("."), F.lpad(frac, 6, "0")),
+    ).otherwise(F.concat(normalized, F.lit(".000000")))
+
+    created_at = F.when(created_ts.isNotNull(), created_at_from_ts).otherwise(created_at_fallback)
+
+    df = df.withColumn("created_at", created_at)
+
+    # Final output schema (drop Kafka metadata + dt)
+    df = df.select(
+        F.col("created_at"),
+        F.col("id"),
+        F.col("price"),
+        F.col("sqft"),
+        F.col("bedrooms"),
+        F.col("bathrooms"),
+        F.col("location"),
+        F.col("year_built"),
+        F.col("condition"),
+    )
+
+    df.write.mode("append").parquet(silver_path)
 
     if args.write_postgres:
         props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}
-        (
-            df.write.mode(args.pg_mode)
-            .jdbc(
-                url=args.pg_url,
-                table=args.pg_table,
-                properties=props,
-            )
-        )
+        df.write.mode(args.pg_mode).jdbc(url=args.pg_url, table=args.pg_table, properties=props)
 
     spark.stop()
 

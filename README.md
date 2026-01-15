@@ -1,7 +1,5 @@
 # BigData Pipeline (Kafka → MinIO → Spark → Postgres → ML)
 
-Runbook này mô tả đúng các bước bạn vừa chạy lại “từ đầu” trên Windows + Minikube (driver Docker).
-
 Pipeline:
 
 - Kafka topic `data-stream`
