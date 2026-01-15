@@ -3,10 +3,13 @@ from kafka.errors import KafkaError, NoBrokersAvailable
 import json, sys, time, os
 
 # --- CẤU HÌNH ---
-KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'http://localhost:9092')
+KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'localhost:9092')
 TOPIC_NAME = 'data-stream'
 DATA_FILE = 'kafka/house_data.json'
 INTERVAL = 3
+# DATA_FILE = '/app/house_data.json'
+# INTERVAL = int(os.getenv('INTERVAL', '3'))
+MAX_RECORDS = int(os.getenv('MAX_RECORDS', '0'))  # 0 = send all
 MAX_RETRY = 10
 
 # --- CÁC HÀM XỬ LÝ ---
@@ -105,6 +108,8 @@ if __name__ == "__main__":
     
     try:
         for i, record in enumerate(data):
+            if MAX_RECORDS > 0 and i >= MAX_RECORDS:
+                break
             print(f"\n[Record #{i+1}]")
             
             # Lấy key (ưu tiên cột 'id', nếu không có thì lấy số thứ tự)
