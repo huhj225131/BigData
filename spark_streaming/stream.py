@@ -96,11 +96,11 @@ def write_to_postgres(df, epoch_id):
                 mode="append", 
                 properties=db_properties
             )
-            print(f"✅ [Batch {epoch_id}] Đã ghi {count} records vào PostgreSQL")
+            print(f"[Batch {epoch_id}] Đã ghi {count} records vào PostgreSQL")
         else:
-            print(f"⚠️ [Batch {epoch_id}] Không có dữ liệu để ghi")
+            print(f"[Batch {epoch_id}] Không có dữ liệu để ghi")
     except Exception as e:
-        print(f"❌ [Batch {epoch_id}] Lỗi ghi PostgreSQL: {e}")
+        print(f"[Batch {epoch_id}] Lỗi ghi PostgreSQL: {e}")
         raise
 
 # Kích hoạt ghi dữ liệu
