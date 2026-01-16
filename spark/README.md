@@ -1,6 +1,6 @@
 # Spark
 
-Chạy Spark **trong Kubernetes** (Minikube) bằng pod `spark-runner`.
+README này ưu tiên cách chạy Spark **trong Kubernetes** (Minikube) bằng pod `spark-runner`.
 
 ## 0) Tổng quan
 
@@ -33,7 +33,7 @@ kubectl cp .\spark\jobs\silver_job.py -n spark "spark-runner:/opt/project/jobs/s
 kubectl cp .\spark\jobs\gold_job.py -n spark "spark-runner:/opt/project/jobs/gold_job.py"
 ```
 
-Ghi chú quan trọng: nếu sửa job code trên máy local, cần `kubectl cp` lại vào pod, nếu không pod sẽ chạy bản cũ.
+Ghi chú quan trọng: nếu bạn sửa job code trên máy local, cần `kubectl cp` lại vào pod, nếu không pod sẽ chạy bản cũ.
 
 ## 3) Run Silver (Bronze → Silver)
 

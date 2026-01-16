@@ -31,7 +31,7 @@ kubectl get nodes
 ### 2.1 MinIO
 
 ```powershell
-kubectl create namespace minio 2>$null
+kubectl create namespace minio>$null
 kubectl apply -n minio -f minio/config_minio.yaml
 kubectl -n minio get pods -w
 ```
@@ -46,7 +46,7 @@ kubectl -n postgres get pods -w
 ### 2.3 Kafka broker
 
 ```powershell
-kubectl create namespace kafka 2>$null
+kubectl create namespace kafka>$null
 kubectl apply -n kafka -f kafka/kafka.yaml
 kubectl -n kafka get pods -w
 ```
@@ -54,7 +54,7 @@ kubectl -n kafka get pods -w
 ### 2.4 Spark runner (pod để chạy `spark-submit` trong cluster)
 
 ```powershell
-kubectl create namespace spark 2>$null
+kubectl create namespace spark>$null
 kubectl apply -f spark/spark-runner.k8s.yaml
 kubectl -n spark get pods -w
 ```

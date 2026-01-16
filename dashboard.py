@@ -1,10 +1,18 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
-import time
 import os
 import altair as alt
 from datetime import datetime
+import warnings
+import subprocess
+
+# Silence pandas DBAPI warnings (we intentionally use psycopg2 connections here).
+warnings.filterwarnings(
+    "ignore",
+    message=r"pandas only supports SQLAlchemy connectable.*",
+    category=UserWarning,
+)
 
 # --- CONFIG ---
 st.set_page_config(
@@ -402,6 +410,74 @@ DB_CONFIG = {
     "password": os.getenv("DB_PASSWORD", "postgres")
 }
 
+DEFAULT_REFRESH_SECONDS = int(os.getenv("REFRESH_SECONDS", "5"))
+
+SPARK_NAMESPACE = os.getenv("SPARK_NAMESPACE", "spark")
+SPARK_RUNNER_POD = os.getenv("SPARK_RUNNER_POD", "spark-runner")
+HOUSE_LAKE_BUCKET = os.getenv("HOUSE_LAKE_BUCKET", "house-lake")
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio.minio.svc.cluster.local:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+SPARK_PACKAGES = os.getenv(
+    "SPARK_PACKAGES",
+    "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.7.1",
+)
+
+
+def run_k8s_batch_process() -> tuple[bool, str]:
+    """Trigger Silver + Gold jobs in the spark-runner pod.
+
+    Assumes:
+    - Bronze data already exists in MinIO.
+    - spark-runner has job files under /opt/project/jobs.
+    """
+
+    silver_cmd = (
+        f"MINIO_ENDPOINT={MINIO_ENDPOINT} MINIO_ACCESS_KEY={MINIO_ACCESS_KEY} MINIO_SECRET_KEY={MINIO_SECRET_KEY} "
+        f"/opt/spark/bin/spark-submit --packages {SPARK_PACKAGES} "
+        f"/opt/project/jobs/silver_job.py --bucket {HOUSE_LAKE_BUCKET} --input-format json --write-postgres"
+    )
+    gold_cmd = (
+        f"MINIO_ENDPOINT={MINIO_ENDPOINT} MINIO_ACCESS_KEY={MINIO_ACCESS_KEY} MINIO_SECRET_KEY={MINIO_SECRET_KEY} "
+        f"/opt/spark/bin/spark-submit --packages {SPARK_PACKAGES} "
+        f"/opt/project/jobs/gold_job.py --bucket {HOUSE_LAKE_BUCKET} --write-postgres"
+    )
+
+    steps = [("Silver", silver_cmd), ("Gold", gold_cmd)]
+    logs: list[str] = []
+
+    for name, cmd in steps:
+        logs.append(f"\n=== Running {name} job ===\n")
+        try:
+            proc = subprocess.run(
+                [
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    SPARK_NAMESPACE,
+                    SPARK_RUNNER_POD,
+                    "--",
+                    "sh",
+                    "-c",
+                    cmd,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False, "kubectl not found. Cài kubectl hoặc chạy dashboard trên máy có kubectl." 
+
+        if proc.stdout:
+            logs.append(proc.stdout)
+        if proc.stderr:
+            logs.append(proc.stderr)
+
+        if proc.returncode != 0:
+            return False, "".join(logs)
+
+    return True, "".join(logs)
+
 # Altair Theme Configuration
 def configure_altair_theme():
     """Configure a professional dark theme for all Altair charts"""
@@ -451,7 +527,7 @@ def load_data():
     
     try:
         df_fact = pd.read_sql(fact_query, conn)
-    except:
+    except Exception:
         df_fact = pd.DataFrame()
         
     try:
@@ -467,6 +543,38 @@ def load_data():
         
     conn.close()
     return df_fact, df_loc, df_trend, df_pred
+
+
+@st.cache_data(ttl=2)
+def load_speed_data(limit: int = 2000):
+    """Load latest events from speed layer (Spark Structured Streaming -> Postgres)."""
+    conn = psycopg2.connect(**DB_CONFIG)
+
+    speed_count_query = "SELECT count(*)::bigint AS n FROM house_data_speed"
+    speed_latest_query = """
+        SELECT id, price, sqft, bedrooms, bathrooms, year_built, location, condition, created_at
+        FROM house_data_speed
+        ORDER BY created_at DESC
+        LIMIT %(limit)s
+    """
+
+    try:
+        df_speed_count = pd.read_sql(speed_count_query, conn)
+        speed_total = int(df_speed_count.iloc[0]["n"]) if not df_speed_count.empty else 0
+    except Exception:
+        speed_total = 0
+
+    try:
+        df_speed = pd.read_sql(speed_latest_query, conn, params={"limit": int(limit)})
+    except Exception:
+        df_speed = pd.DataFrame()
+
+    conn.close()
+
+    if not df_speed.empty and "created_at" in df_speed.columns:
+        df_speed["created_at"] = pd.to_datetime(df_speed["created_at"], errors="coerce")
+
+    return df_speed, speed_total
 
 # --- MAIN APP ---
 
@@ -534,8 +642,10 @@ with st.sidebar:
     st.markdown("### 📊 Thống Kê Nhanh")
     if not df_fact.empty:
         st.metric("Tổng số BĐS", f"{len(df_fact):,}")
-        st.metric("Số khu vực", f"{df_fact['location'].nunique()}")
-        st.metric("Giá TB", f"${df_fact['price'].mean():,.0f}")
+        if 'location' in df_fact.columns:
+            st.metric("Số khu vực", f"{df_fact['location'].nunique():,}")
+        if 'price' in df_fact.columns:
+            st.metric("Giá TB", f"${df_fact['price'].mean():,.0f}")
     
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
     
@@ -546,8 +656,21 @@ with st.sidebar:
         if st.button("🔄 Làm mới", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-    with col2:
-        auto_refresh = st.checkbox("Tự động", value=True, help="Tự động cập nhật mỗi 5 giây")
+
+    st.markdown("### ⚡ Data Stream")
+    use_speed = st.checkbox(
+        "Hiển thị data stream (speed layer)",
+        value=True,
+        help="Đọc từ bảng Postgres house_data_speed (Spark Streaming). Không ảnh hưởng KPI batch.",
+    )
+    auto_refresh = st.checkbox("Tự động refresh stream", value=True, help="Tự động cập nhật feed realtime")
+    refresh_seconds = st.slider(
+        "Chu kỳ refresh stream (giây)",
+        min_value=1,
+        max_value=30,
+        value=DEFAULT_REFRESH_SECONDS,
+        help="Chỉ áp dụng cho phần Data Stream",
+    )
     
     # Last Updated
     st.markdown(f"""
@@ -556,18 +679,23 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-# Apply Filters
-filtered_df = df_fact.copy()
-if not filtered_df.empty:
-    if selected_locs:
-        filtered_df = filtered_df[filtered_df['location'].isin(selected_locs)]
-    if selected_conds:
-        filtered_df = filtered_df[filtered_df['condition'].isin(selected_conds)]
-    # Apply price filter
-    filtered_df = filtered_df[
-        (filtered_df['price'] >= price_range[0]) & 
-        (filtered_df['price'] <= price_range[1])
-    ]
+
+def _apply_filters(df_in: pd.DataFrame) -> pd.DataFrame:
+    df_out = df_in.copy()
+    if df_out.empty:
+        return df_out
+    if selected_locs and 'location' in df_out.columns:
+        df_out = df_out[df_out['location'].isin(selected_locs)]
+    if selected_conds and 'condition' in df_out.columns:
+        df_out = df_out[df_out['condition'].isin(selected_conds)]
+    if 'price' in df_out.columns:
+        df_out = df_out[(df_out['price'] >= price_range[0]) & (df_out['price'] <= price_range[1])]
+    return df_out
+
+
+# Batch-filtered df used for KPIs + charts
+batch_filtered_df = _apply_filters(df_fact)
+filtered_df = batch_filtered_df
 
 # --- HEADER SECTION ---
 st.markdown("""
@@ -580,50 +708,182 @@ st.markdown("""
 # --- KPI METRICS ROW ---
 st.markdown("### 📈 Chỉ Số Hiệu Suất")
 
-k1, k2, k3, k4 = st.columns(4)
+def _render_batch_kpis(batch_df: pd.DataFrame):
+    """Render KPIs strictly from batch (fact_house)."""
 
-with k1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">🏘️</div>
-        <div class="metric-label">Số BĐS hiện có</div>
-        <div class="metric-value">{len(filtered_df):,}</div>
-        <div class="metric-delta delta-positive">● Thời gian thực</div>
+    k1, k2, k3, k4 = st.columns(4)
+
+    n_rows = int(len(batch_df))
+    avg_price = float(batch_df['price'].mean()) if (not batch_df.empty and 'price' in batch_df.columns) else 0.0
+    avg_sqft = float(batch_df['sqft'].mean()) if (not batch_df.empty and 'sqft' in batch_df.columns) else 0.0
+    total_value = float(batch_df['price'].sum()) if (not batch_df.empty and 'price' in batch_df.columns) else 0.0
+
+    with k1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">🏘️</div>
+            <div class="metric-label">Số BĐS hiện có</div>
+            <div class="metric-value">{n_rows:,}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with k2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">💵</div>
+            <div class="metric-label">Giá trung bình</div>
+            <div class="metric-value">${avg_price:,.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with k3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">📐</div>
+            <div class="metric-label">Diện tích TB</div>
+            <div class="metric-value">{avg_sqft:,.0f} sqft</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with k4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">💰</div>
+            <div class="metric-label">Tổng giá trị</div>
+            <div class="metric-value">${total_value/1e6:,.1f}M</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def _render_stream_fragment():
+    """Render stream feed strictly from speed layer."""
+
+    if not use_speed:
+        st.info("Đang ẩn Data Stream.")
+        return
+
+    df_speed, speed_total = load_speed_data(limit=3000)
+    speed_lag_seconds = None
+
+    if not df_speed.empty and "created_at" in df_speed.columns:
+        now_ts = pd.Timestamp.utcnow().tz_localize(None)
+        last_event_ts = df_speed["created_at"].max()
+        if pd.notna(last_event_ts):
+            speed_lag_seconds = float((now_ts - last_event_ts).total_seconds())
+
+    st.markdown("""
+    <div class="section-card">
+        <div class="section-title">
+            <span class="section-title-icon">⚡</span>
+            <span style="display:flex; align-items:center; gap:10px;">
+                <span class="pulse-dot"></span>
+                Data Stream (Speed Layer)
+            </span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-with k2:
-    avg_price = filtered_df['price'].mean() if not filtered_df.empty else 0
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">💵</div>
-        <div class="metric-label">Giá trung bình</div>
-        <div class="metric-value">${avg_price:,.0f}</div>
-        <div class="metric-delta delta-neutral">Giá thị trường</div>
-    </div>
-    """, unsafe_allow_html=True)
+    if df_speed.empty:
+        st.warning("Chưa đọc được dữ liệu từ house_data_speed. Kiểm tra Spark streaming + kết nối Postgres.")
+        return
 
-with k3:
-    avg_sqft = filtered_df['sqft'].mean() if not filtered_df.empty else 0
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">📐</div>
-        <div class="metric-label">Diện tích TB</div>
-        <div class="metric-value">{avg_sqft:,.0f} sqft</div>
-        <div class="metric-delta delta-neutral">Trung bình</div>
-    </div>
-    """, unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Speed total rows", f"{speed_total:,}")
+    with c2:
+        if speed_lag_seconds is None:
+            st.metric("Stream lag", "-")
+        else:
+            st.metric("Stream lag", f"{speed_lag_seconds:.0f}s")
+    with c3:
+        st.metric("Refresh", f"{int(refresh_seconds)}s")
 
-with k4:
-    total_value = filtered_df['price'].sum() if not filtered_df.empty else 0
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">💰</div>
-        <div class="metric-label">Tổng giá trị</div>
-        <div class="metric-value">${total_value/1e6:,.1f}M</div>
-        <div class="metric-delta delta-positive">● Đang hoạt động</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Throughput chart: listings per minute (with anti-flicker)
+    if "created_at" in df_speed.columns:
+        tmp = df_speed[["created_at"]].dropna().copy()
+        if not tmp.empty:
+            tmp["minute"] = tmp["created_at"].dt.floor("min")
+            per_min = tmp.groupby("minute").size().reset_index(name="events").sort_values("minute")
+            
+            # Only update chart if data actually changed
+            current_hash = hash(tuple(per_min["events"].values))
+            last_hash = st.session_state.get("_chart_hash")
+            
+            if last_hash != current_hash or last_hash is None:
+                st.session_state["_chart_hash"] = current_hash
+                line = alt.Chart(per_min).mark_line(point=True, strokeWidth=2).encode(
+                    x=alt.X("minute:T", title="Time"),
+                    y=alt.Y("events:Q", title="Listings / minute"),
+                    tooltip=[
+                        alt.Tooltip("minute:T", title="Minute"),
+                        alt.Tooltip("events:Q", title="Events"),
+                    ],
+                ).properties(height=180)
+                st.altair_chart(line, use_container_width=True, key="speed_chart")
+            else:
+                # Reuse previous chart to avoid rerender
+                if "_last_chart" in st.session_state:
+                    st.altair_chart(st.session_state["_last_chart"], use_container_width=True, key="speed_chart")
+                else:
+                    line = alt.Chart(per_min).mark_line(point=True, strokeWidth=2).encode(
+                        x=alt.X("minute:T", title="Time"),
+                        y=alt.Y("events:Q", title="Listings / minute"),
+                        tooltip=[
+                            alt.Tooltip("minute:T", title="Minute"),
+                            alt.Tooltip("events:Q", title="Events"),
+                        ],
+                    ).properties(height=180)
+                    st.session_state["_last_chart"] = line
+                    st.altair_chart(line, use_container_width=True, key="speed_chart")
+
+    st.markdown("**Latest events**")
+    show_cols = [
+        c
+        for c in [
+            "created_at",
+            "id",
+            "location",
+            "price",
+            "sqft",
+            "bedrooms",
+            "bathrooms",
+            "year_built",
+            "condition",
+        ]
+        if c in df_speed.columns
+    ]
+    view = df_speed[show_cols].head(30).copy()
+
+    prev_ts = st.session_state.get("_last_speed_ts")
+    if prev_ts is None:
+        prev_ts = pd.Timestamp.min
+
+    if "created_at" in view.columns:
+        is_new = pd.to_datetime(view["created_at"], errors="coerce") > prev_ts
+        view.insert(0, "status", ["NEW" if v else "" for v in is_new])
+
+        def _highlight_new_rows(row):
+            if row.get("status") == "NEW":
+                return ["background-color: rgba(0, 200, 83, 0.20)"] * len(row)
+            return [""] * len(row)
+
+        st.dataframe(view.style.apply(_highlight_new_rows, axis=1), hide_index=True, use_container_width=True)
+
+        max_ts = pd.to_datetime(df_speed["created_at"], errors="coerce").max()
+        if pd.notna(max_ts):
+            st.session_state["_last_speed_ts"] = max_ts
+    else:
+        st.dataframe(view, hide_index=True, use_container_width=True)
+
+
+_render_batch_kpis(batch_filtered_df)
+
+
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+_run_every = f"{int(refresh_seconds)}s" if (auto_refresh and use_speed) else None
+st.fragment(run_every=_run_every)(_render_stream_fragment)()
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -912,12 +1172,9 @@ with m3:
 st.markdown("""
 <div class="dashboard-footer">
     <hr class='custom-divider'>
-    <p>🏠 Trung Tâm Phân Tích Bất Động Sản | Vận hành bởi Spark + Kafka + MinIO + PostgreSQL</p>
-    <p style="font-size: 0.75rem;">© 2026 Nền tảng Phân tích Dữ liệu Lớn | Pipeline Dữ liệu Thời gian thực</p>
+    <p>🏠 Trung Tâm Phân Tích Bất Động Sản VN Brain</p>
+    <p style="font-size: 0.75rem;">© 2026 Nền tảng Phân tích Dữ liệu Lớn</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Auto-refresh logic
-if auto_refresh:
-    time.sleep(5)
-    st.rerun()
+# Auto-refresh is handled by the stream fragment (no full-page reruns).

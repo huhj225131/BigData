@@ -101,7 +101,7 @@ kubectl -n minio port-forward svc/minio-public 9001:9001
 ```powershell
 cd D:\2025.1\bigdata\btl_bigdata
 $POD_PRO = kubectl get pods -n kafka -l app=producer -o jsonpath='{.items[0].metadata.name}'
-kubectl exec -it -n kafka $POD_PRO -- python /app/producer.py
+kubectl exec -it -n kafka $POD_PRO -- sh -lc "export INTERVAL=3; export REPEAT=1; python /app/producer.py"
 ```
 
 **Output mong đợi:**
