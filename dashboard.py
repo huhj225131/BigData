@@ -16,10 +16,18 @@ Database: PostgreSQL (port 5433)
 import streamlit as st
 import pandas as pd
 import psycopg2
-import time
 import os
 import altair as alt
 from datetime import datetime
+import warnings
+import subprocess
+
+# Silence pandas DBAPI warnings (we intentionally use psycopg2 connections here).
+warnings.filterwarnings(
+    "ignore",
+    message=r"pandas only supports SQLAlchemy connectable.*",
+    category=UserWarning,
+)
 
 # --- CONFIG ---
 st.set_page_config(
@@ -494,6 +502,9 @@ st.markdown("""
 # --- KPI METRICS ---
 st.markdown("### 📈 Chỉ Số Hiệu Suất")
 
+def _render_batch_kpis(batch_df: pd.DataFrame):
+    """Render KPIs strictly from batch (fact_house)."""
+
 k1, k2, k3, k4 = st.columns(4)
 
 with k1:
@@ -509,38 +520,32 @@ with k1:
     </div>
     """, unsafe_allow_html=True)
 
-with k2:
-    avg_price = filtered_df['price'].mean() if not filtered_df.empty else 0
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">💵</div>
-        <div class="metric-label">Giá trung bình</div>
-        <div class="metric-value">${avg_price:,.0f}</div>
-        <div class="metric-delta delta-neutral">Giá thị trường</div>
-    </div>
-    """, unsafe_allow_html=True)
+    with k2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">💵</div>
+            <div class="metric-label">Giá trung bình</div>
+            <div class="metric-value">${avg_price:,.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with k3:
-    avg_sqft = filtered_df['sqft'].mean() if not filtered_df.empty else 0
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">📐</div>
-        <div class="metric-label">Diện tích TB</div>
-        <div class="metric-value">{avg_sqft:,.0f} sqft</div>
-        <div class="metric-delta delta-neutral">Trung bình</div>
-    </div>
-    """, unsafe_allow_html=True)
+    with k3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">📐</div>
+            <div class="metric-label">Diện tích TB</div>
+            <div class="metric-value">{avg_sqft:,.0f} sqft</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with k4:
-    total_value = filtered_df['price'].sum() if not filtered_df.empty else 0
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">💰</div>
-        <div class="metric-label">Tổng giá trị</div>
-        <div class="metric-value">${total_value/1e6:,.1f}M</div>
-        <div class="metric-delta delta-positive">● Đang hoạt động</div>
-    </div>
-    """, unsafe_allow_html=True)
+    with k4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-icon">💰</div>
+            <div class="metric-label">Tổng giá trị</div>
+            <div class="metric-value">${total_value/1e6:,.1f}M</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -917,8 +922,8 @@ with m3:
 st.markdown("""
 <div class="dashboard-footer">
     <hr class='custom-divider'>
-    <p>🏠 Trung Tâm Phân Tích Bất Động Sản | Vận hành bởi Spark + Kafka + MinIO + PostgreSQL</p>
-    <p style="font-size: 0.75rem;">© 2026 Nền tảng Phân tích Dữ liệu Lớn | Pipeline Dữ liệu Thời gian thực</p>
+    <p>🏠 Trung Tâm Phân Tích Bất Động Sản VN Brain</p>
+    <p style="font-size: 0.75rem;">© 2026 Nền tảng Phân tích Dữ liệu Lớn</p>
 </div>
 """, unsafe_allow_html=True)
 

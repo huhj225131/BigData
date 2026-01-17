@@ -8,6 +8,7 @@ TOPIC_NAME = 'data-stream'
 DATA_FILE = '/app/house_data.json'
 INTERVAL = int(os.getenv('INTERVAL', '3'))
 MAX_RECORDS = int(os.getenv('MAX_RECORDS', '0'))  # 0 = send all
+REPEAT = os.getenv('REPEAT', '0').strip().lower() in ('1', 'true', 'yes', 'y')
 MAX_RETRY = 10
 
 # --- CÁC HÀM XỬ LÝ ---
@@ -104,24 +105,33 @@ if __name__ == "__main__":
     
     print(f"Bắt đầu gửi dữ liệu vào topic '{TOPIC_NAME}'...")
     
+    total_sent = 0
+    loop_no = 0
+
     try:
-        for i, record in enumerate(data):
-            if MAX_RECORDS > 0 and i >= MAX_RECORDS:
+        while True:
+            loop_no += 1
+            for i, record in enumerate(data):
+                if MAX_RECORDS > 0 and total_sent >= MAX_RECORDS:
+                    raise StopIteration
+
+                # Lấy key (ưu tiên cột 'id', nếu không có thì lấy số thứ tự)
+                key = record.get("id", str(i))
+
+                total_sent += 1
+                print(f"\n[Record #{total_sent}] (loop={loop_no})")
+                send_message(
+                    producer=producer,
+                    key=key,
+                    value=record,
+                    sleep_time=INTERVAL
+                )
+
+            if not REPEAT:
                 break
-            print(f"\n[Record #{i+1}]")
-            
-            # Lấy key (ưu tiên cột 'id', nếu không có thì lấy số thứ tự)
-            key = record.get("id", str(i))
-            
-            send_message(
-                producer=producer, 
-                key=key, 
-                value=record, 
-                sleep_time=INTERVAL
-            )
-            
-    except KeyboardInterrupt:
-        print("\nĐã dừng thủ công.")
+
+    except (KeyboardInterrupt, StopIteration):
+        print("\nĐã dừng.")
         
     finally:
         print("Đang flush dữ liệu còn sót...")

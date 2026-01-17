@@ -72,7 +72,7 @@ spec:
         - name: BRONZE_PREFIX
           value: "bronze"
         - name: BATCH_SIZE
-          value: "200"
+          value: "10"
         - name: BATCH_TIMEOUT_SECONDS
           value: "180"
         - name: OUTPUT_FORMAT

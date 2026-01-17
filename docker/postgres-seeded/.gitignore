@@ -1,0 +1,3 @@
+# Don’t accidentally commit DB dumps
+/seed/*.dump
+/seed/*.sql
