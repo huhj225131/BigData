@@ -1,3 +1,18 @@
+"""
+📊 BigData Dashboard - Real Estate Analytics
+
+Chức năng:
+- Lambda Architecture: Speed Layer + Batch Layer
+- Real-time data visualization (<10s latency)
+- Gold analytics từ 4 bảng Spark aggregations
+- ML predictions display
+
+Chạy: streamlit run dashboard.py --server.port 8501
+URL: http://localhost:8501
+
+Database: PostgreSQL (port 5433)
+"""
+
 import streamlit as st
 import pandas as pd
 import psycopg2
@@ -17,10 +32,8 @@ st.set_page_config(
 # Professional Custom CSS
 st.markdown("""
 <style>
-    /* Import Google Fonts */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
-    /* Global Styles */
     .main {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         background-attachment: fixed;
@@ -30,7 +43,6 @@ st.markdown("""
         background: linear-gradient(180deg, #1a1f3c 0%, #232946 50%, #2a3150 100%);
     }
     
-    /* Global Text Improvements */
     .stApp, .stApp p, .stApp span, .stApp div {
         color: #e8eaf6 !important;
     }
@@ -43,17 +55,14 @@ st.markdown("""
         color: #ffffff !important;
     }
     
-    /* Better text contrast for labels */
     label, .stSelectbox label, .stMultiSelect label, .stSlider label {
         color: #ffffff !important;
         font-weight: 500 !important;
     }
     
-    /* Hide default Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
-    /* Custom Header */
     .main-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 2rem 2.5rem;
@@ -64,23 +73,12 @@ st.markdown("""
         overflow: hidden;
     }
     
-    .main-header::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        right: -50%;
-        width: 100%;
-        height: 200%;
-        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
-    }
-    
     .main-header h1 {
         color: white;
         font-family: 'Inter', sans-serif;
         font-weight: 700;
         font-size: 2.5rem;
         margin: 0;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
     }
     
     .main-header p {
@@ -90,21 +88,14 @@ st.markdown("""
         margin-top: 0.5rem;
     }
     
-    /* Metric Cards */
     .metric-card {
         background: linear-gradient(145deg, #2d3250 0%, #3a3f5c 100%);
         border-radius: 16px;
         padding: 1.5rem;
         border: 1px solid rgba(255,255,255,0.15);
         box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
         position: relative;
         overflow: hidden;
-    }
-    
-    .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 12px 40px rgba(102, 126, 234, 0.3);
     }
     
     .metric-card::before {
@@ -128,7 +119,6 @@ st.markdown("""
         font-weight: 700;
         color: #ffffff !important;
         margin: 0.5rem 0;
-        text-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
     
     .metric-label {
@@ -159,7 +149,6 @@ st.markdown("""
         color: #98a8f8 !important;
     }
     
-    /* Section Cards */
     .section-card {
         background: linear-gradient(145deg, #2d3250 0%, #363b58 100%);
         border-radius: 20px;
@@ -187,30 +176,9 @@ st.markdown("""
         font-size: 1.2rem;
     }
     
-    /* Sidebar Styling */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #232946 0%, #1e2340 100%);
         border-right: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    [data-testid="stSidebar"] .stMarkdown h2,
-    [data-testid="stSidebar"] .stMarkdown h3 {
-        color: #ffffff !important;
-        font-family: 'Inter', sans-serif;
-    }
-    
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] label {
-        color: #e8eaf6 !important;
-    }
-    
-    [data-testid="stSidebar"] .stMetric label {
-        color: #b8c1ec !important;
-    }
-    
-    [data-testid="stSidebar"] [data-testid="stMetricValue"] {
-        color: #ffffff !important;
     }
     
     .sidebar-header {
@@ -227,31 +195,15 @@ st.markdown("""
         font-size: 1.3rem;
     }
     
-    /* Buttons */
     .stButton > button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
         border: none;
         border-radius: 10px;
         padding: 0.75rem 2rem;
-        font-family: 'Inter', sans-serif;
         font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
     }
     
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
-    }
-    
-    /* Data Tables */
-    .dataframe {
-        border-radius: 10px;
-        overflow: hidden;
-    }
-    
-    /* Status Badge */
     .status-badge {
         display: inline-flex;
         align-items: center;
@@ -281,7 +233,6 @@ st.markdown("""
         50% { opacity: 0.5; transform: scale(1.2); }
     }
     
-    /* Divider */
     .custom-divider {
         height: 2px;
         background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.5), transparent);
@@ -289,7 +240,6 @@ st.markdown("""
         border: none;
     }
     
-    /* Footer */
     .dashboard-footer {
         text-align: center;
         padding: 1.5rem;
@@ -298,29 +248,6 @@ st.markdown("""
         margin-top: 2rem;
     }
     
-    .dashboard-footer p {
-        color: #b8c1ec !important;
-    }
-    
-    /* Multiselect styling */
-    .stMultiSelect {
-        background: rgba(255,255,255,0.08);
-        border-radius: 10px;
-    }
-    
-    .stMultiSelect [data-baseweb="tag"] {
-        background: #667eea !important;
-    }
-    
-    /* Selectbox and Input styling */
-    .stSelectbox > div > div,
-    .stMultiSelect > div > div {
-        background-color: rgba(255,255,255,0.08) !important;
-        border-color: rgba(255,255,255,0.2) !important;
-        color: #ffffff !important;
-    }
-    
-    /* Tab styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background: rgba(255,255,255,0.08);
@@ -331,64 +258,12 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] {
         border-radius: 10px;
         padding: 0.5rem 1.5rem;
-        font-family: 'Inter', sans-serif;
         color: #e8eaf6 !important;
     }
     
     .stTabs [aria-selected="true"] {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: #ffffff !important;
-    }
-    
-    /* Info boxes */
-    .stAlert {
-        border-radius: 12px;
-        border: none;
-        background: rgba(102, 126, 234, 0.15) !important;
-        color: #e8eaf6 !important;
-    }
-    
-    .stAlert p {
-        color: #e8eaf6 !important;
-    }
-    
-    /* Charts container */
-    .chart-container {
-        background: rgba(255,255,255,0.03);
-        border-radius: 15px;
-        padding: 1rem;
-        border: 1px solid rgba(255,255,255,0.08);
-    }
-    
-    /* DataFrame styling */
-    .stDataFrame {
-        background: rgba(255,255,255,0.05);
-        border-radius: 10px;
-    }
-    
-    /* Checkbox styling */
-    .stCheckbox label span {
-        color: #e8eaf6 !important;
-    }
-    
-    /* Slider styling */
-    .stSlider [data-baseweb="slider"] {
-        background: transparent;
-    }
-    
-    /* Caption styling */
-    .stCaption, small {
-        color: #b8c1ec !important;
-    }
-    
-    /* Warning box */
-    .stWarning {
-        background: rgba(255, 193, 7, 0.15) !important;
-        color: #ffd54f !important;
-    }
-    
-    .stWarning p {
-        color: #ffd54f !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -402,9 +277,8 @@ DB_CONFIG = {
     "password": os.getenv("DB_PASSWORD", "postgres")
 }
 
-# Altair Theme Configuration
+# Altair Theme
 def configure_altair_theme():
-    """Configure a professional dark theme for all Altair charts"""
     return {
         'config': {
             'background': 'transparent',
@@ -414,18 +288,14 @@ def configure_altair_theme():
                 'gridColor': 'rgba(255,255,255,0.15)',
                 'labelColor': '#e8eaf6',
                 'titleColor': '#ffffff',
-                'tickColor': 'rgba(255,255,255,0.4)',
                 'labelFontSize': 11,
-                'titleFontSize': 12,
             },
             'legend': {
                 'labelColor': '#e8eaf6',
                 'titleColor': '#ffffff',
-                'labelFontSize': 11,
             },
             'title': {
                 'color': '#ffffff',
-                'fontSize': 14,
             }
         }
     }
@@ -433,32 +303,83 @@ def configure_altair_theme():
 alt.themes.register('dashboard_dark', configure_altair_theme)
 alt.themes.enable('dashboard_dark')
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=0)  # Tắt cache - luôn query DB để có data mới nhất
 def load_data():
     conn = psycopg2.connect(**DB_CONFIG)
     
-    # query_fact: Handle potential missing 'created_at' by falling back to ingested_at or simple select
-    fact_query = """
-    SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition
-    FROM fact_house LIMIT 2000
+    # SPEED LAYER: Real-time data (latency <10s)
+    speed_query = """
+    SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition, created_at,
+           'SPEED' as source
+    FROM house_data_speed 
+    ORDER BY created_at DESC 
+    LIMIT 1000
     """
     
-    loc_query = "SELECT * FROM gold_location_stats ORDER BY avg_price DESC"
-    trend_query = "SELECT * FROM gold_year_trend ORDER BY year_built"
+    # BATCH LAYER: High accuracy data
+    fact_query = """
+    SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition,
+           created_at, 'BATCH' as source
+    FROM fact_house 
+    ORDER BY created_at DESC
+    LIMIT 2000
+    """
     
-    # Try to get predictions if table exists
+    # GOLD LAYER: 4 aggregation tables
+    loc_query = "SELECT * FROM gold_location_stats ORDER BY avg_price DESC"
+    cond_query = "SELECT * FROM gold_condition_stats ORDER BY avg_price DESC"
+    bedroom_query = "SELECT * FROM gold_bedroom_analysis ORDER BY bedrooms"
+    decade_query = "SELECT * FROM gold_year_built_trends ORDER BY decade"
+    
     pred_query = "SELECT actual_price, predicted_price, run_id FROM house_price_predictions ORDER BY as_of_utc DESC LIMIT 500"
     
+    # Load Speed Layer
+    try:
+        df_speed = pd.read_sql(speed_query, conn)
+        df_speed['created_at'] = pd.to_datetime(df_speed['created_at'])
+    except:
+        df_speed = pd.DataFrame()
+    
+    # Load Batch Layer
     try:
         df_fact = pd.read_sql(fact_query, conn)
+        if 'created_at' in df_fact.columns:
+            df_fact['created_at'] = pd.to_datetime(df_fact['created_at'])
     except:
         df_fact = pd.DataFrame()
+    
+    # MERGE: Combine Speed + Batch
+    if not df_speed.empty and not df_fact.empty:
+        df_combined = pd.concat([df_speed, df_fact], ignore_index=True)
+        df_combined = df_combined.sort_values('created_at', ascending=False)
+        df_combined = df_combined.drop_duplicates(subset=['price', 'sqft', 'location', 'year_built'], keep='first')
+    elif not df_speed.empty:
+        df_combined = df_speed
+    elif not df_fact.empty:
+        df_combined = df_fact
+    else:
+        df_combined = pd.DataFrame()
         
+    # Load Gold Layer
     try:
         df_loc = pd.read_sql(loc_query, conn)
-        df_trend = pd.read_sql(trend_query, conn)
     except:
-        df_loc, df_trend = pd.DataFrame(), pd.DataFrame()
+        df_loc = pd.DataFrame()
+    
+    try:
+        df_cond = pd.read_sql(cond_query, conn)
+    except:
+        df_cond = pd.DataFrame()
+    
+    try:
+        df_bedroom = pd.read_sql(bedroom_query, conn)
+    except:
+        df_bedroom = pd.DataFrame()
+    
+    try:
+        df_decade = pd.read_sql(decade_query, conn)
+    except:
+        df_decade = pd.DataFrame()
 
     try:
         df_pred = pd.read_sql(pred_query, conn)
@@ -466,23 +387,19 @@ def load_data():
         df_pred = pd.DataFrame()
         
     conn.close()
-    return df_fact, df_loc, df_trend, df_pred
+    return df_combined, df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred
 
 # --- MAIN APP ---
+df_combined, df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred = load_data()
 
-# Load Data
-df_fact, df_loc, df_trend, df_pred = load_data()
-
-# --- SIDEBAR (FILTERS) ---
+# --- SIDEBAR ---
 with st.sidebar:
-    # Sidebar Header
     st.markdown("""
     <div class="sidebar-header">
         <h2>🎛️ Bảng Điều Khiển</h2>
     </div>
     """, unsafe_allow_html=True)
     
-    # Status indicator
     st.markdown("""
     <div class="status-badge status-active">
         <div class="pulse-dot"></div>
@@ -492,50 +409,52 @@ with st.sidebar:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Filter Section
+    # Data Source Selection
+    st.markdown("### 🎚️ Nguồn Dữ Liệu")
+    data_source = st.radio(
+        "Chọn layer",
+        ["🔥 Speed + Batch (Merge)", "⚡ Speed Only (Real-time)", "📦 Batch Only (Accurate)"],
+        help="Speed: <10s latency | Batch: High accuracy"
+    )
+    
+    if "Speed Only" in data_source:
+        df_display = df_speed
+    elif "Batch Only" in data_source:
+        df_display = df_fact
+    else:
+        df_display = df_combined
+    
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+    
+    # Filters
     st.markdown("### 🎯 Bộ Lọc")
+    all_locations = sorted(df_display['location'].unique()) if not df_display.empty and 'location' in df_display.columns else []
+    selected_locs = st.multiselect("📍 Khu vực", all_locations, default=[])
     
-    # Location Filter
-    all_locations = sorted(df_fact['location'].unique()) if not df_fact.empty and 'location' in df_fact.columns else []
-    selected_locs = st.multiselect(
-        "📍 Khu vực", 
-        all_locations, 
-        default=[],
-        help="Lọc bất động sản theo vùng địa lý"
-    )
+    all_conditions = sorted(df_display['condition'].unique()) if not df_display.empty and 'condition' in df_display.columns else []
+    selected_conds = st.multiselect("🏷️ Tình trạng nhà", all_conditions, default=[])
     
-    # Condition Filter
-    all_conditions = sorted(df_fact['condition'].unique()) if not df_fact.empty and 'condition' in df_fact.columns else []
-    selected_conds = st.multiselect(
-        "🏷️ Tình trạng nhà", 
-        all_conditions, 
-        default=[],
-        help="Lọc theo tình trạng bất động sản"
-    )
-    
-    # Price Range Filter
-    if not df_fact.empty and 'price' in df_fact.columns:
-        min_price = int(df_fact['price'].min())
-        max_price = int(df_fact['price'].max())
-        price_range = st.slider(
-            "💰 Khoảng giá",
-            min_value=min_price,
-            max_value=max_price,
-            value=(min_price, max_price),
-            format="$%d",
-            help="Lọc bất động sản trong khoảng giá"
-        )
+    if not df_display.empty and 'price' in df_display.columns:
+        min_price = int(df_display['price'].min())
+        max_price = int(df_display['price'].max())
+        price_range = st.slider("💰 Khoảng giá", min_value=min_price, max_value=max_price, value=(min_price, max_price), format="$%d")
     else:
         price_range = (0, 1000000)
     
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
     
-    # Quick Stats in Sidebar
+    # Quick Stats
     st.markdown("### 📊 Thống Kê Nhanh")
-    if not df_fact.empty:
-        st.metric("Tổng số BĐS", f"{len(df_fact):,}")
-        st.metric("Số khu vực", f"{df_fact['location'].nunique()}")
-        st.metric("Giá TB", f"${df_fact['price'].mean():,.0f}")
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        st.metric("⚡ Speed", f"{len(df_speed):,}")
+    with col_s2:
+        st.metric("📦 Batch", f"{len(df_fact):,}")
+    
+    if not df_display.empty:
+        st.metric("Tổng hiển thị", f"{len(df_display):,}")
+        st.metric("Số khu vực", f"{df_display['location'].nunique()}")
+        st.metric("Giá TB", f"${df_display['price'].mean():,.0f}")
     
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
     
@@ -547,9 +466,8 @@ with st.sidebar:
             st.cache_data.clear()
             st.rerun()
     with col2:
-        auto_refresh = st.checkbox("Tự động", value=True, help="Tự động cập nhật mỗi 5 giây")
+        auto_refresh = st.checkbox("Tự động", value=True)
     
-    # Last Updated
     st.markdown(f"""
     <div style="text-align: center; margin-top: 2rem; color: rgba(255,255,255,0.4); font-size: 0.8rem;">
         Cập nhật lúc: {datetime.now().strftime("%H:%M:%S")}
@@ -557,19 +475,15 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # Apply Filters
-filtered_df = df_fact.copy()
+filtered_df = df_display.copy()
 if not filtered_df.empty:
     if selected_locs:
         filtered_df = filtered_df[filtered_df['location'].isin(selected_locs)]
     if selected_conds:
         filtered_df = filtered_df[filtered_df['condition'].isin(selected_conds)]
-    # Apply price filter
-    filtered_df = filtered_df[
-        (filtered_df['price'] >= price_range[0]) & 
-        (filtered_df['price'] <= price_range[1])
-    ]
+    filtered_df = filtered_df[(filtered_df['price'] >= price_range[0]) & (filtered_df['price'] <= price_range[1])]
 
-# --- HEADER SECTION ---
+# --- HEADER ---
 st.markdown("""
 <div class="main-header">
     <h1>🏠 Trung Tâm Phân Tích Bất Động Sản</h1>
@@ -577,18 +491,21 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- KPI METRICS ROW ---
+# --- KPI METRICS ---
 st.markdown("### 📈 Chỉ Số Hiệu Suất")
 
 k1, k2, k3, k4 = st.columns(4)
 
 with k1:
+    speed_count = len(df_speed) if not df_speed.empty else 0
+    batch_count = len(df_fact) if not df_fact.empty else 0
+    delta_text = f"⚡{speed_count} + 📦{batch_count}" if speed_count > 0 else "📦 Batch only"
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-icon">🏘️</div>
         <div class="metric-label">Số BĐS hiện có</div>
         <div class="metric-value">{len(filtered_df):,}</div>
-        <div class="metric-delta delta-positive">● Thời gian thực</div>
+        <div class="metric-delta delta-positive">● {delta_text}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -627,7 +544,72 @@ with k4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- SECTION 2: MARKET INTELLIGENCE (GOLD LAYERS) ---
+# --- SECTION 1.5: REAL-TIME FEED (SPEED LAYER) ---
+if not df_speed.empty:
+    st.markdown("""
+    <div class="section-card">
+        <div class="section-title">
+            <span class="section-title-icon">⚡</span>
+            Luồng Dữ Liệu Real-time (Speed Layer)
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    rt_col1, rt_col2 = st.columns([3, 1])
+    
+    with rt_col1:
+        st.markdown("#### 🔥 Dữ liệu mới nhất (Latency <10s)")
+        df_speed_display = df_speed.head(20)[['created_at', 'location', 'price', 'sqft', 'bedrooms', 'condition']]
+        df_speed_display = df_speed_display.rename(columns={
+            'created_at': '⏰ Thời gian',
+            'location': '📍 Vị trí',
+            'price': '💰 Giá',
+            'sqft': '📐 DT',
+            'bedrooms': '🛏️ PN',
+            'condition': '⭐ TT'
+        })
+        df_speed_display['💰 Giá'] = df_speed_display['💰 Giá'].apply(lambda x: f"${x:,.0f}")
+        st.dataframe(df_speed_display, hide_index=True, use_container_width=True, height=300)
+    
+    with rt_col2:
+        st.markdown("#### 📊 Latency So Sánh")
+        if not df_speed.empty and not df_fact.empty:
+            try:
+                now = pd.Timestamp.now(tz='UTC')
+                if df_speed['created_at'].dt.tz is None:
+                    df_speed_tz = df_speed.copy()
+                    df_speed_tz['created_at'] = pd.to_datetime(df_speed_tz['created_at']).dt.tz_localize('UTC')
+                else:
+                    df_speed_tz = df_speed
+                
+                if df_fact['created_at'].dt.tz is None:
+                    df_fact_tz = df_fact.copy()
+                    df_fact_tz['created_at'] = pd.to_datetime(df_fact_tz['created_at']).dt.tz_localize('UTC')
+                else:
+                    df_fact_tz = df_fact
+                
+                latest_speed = df_speed_tz['created_at'].max()
+                latest_batch = df_fact_tz['created_at'].max()
+                
+                speed_lag = (now - latest_speed).total_seconds()
+                batch_lag = (now - latest_batch).total_seconds()
+                
+                st.metric("⚡ Speed Lag", f"{speed_lag:.1f}s")
+                st.metric("📦 Batch Lag", f"{batch_lag/60:.1f}m")
+                
+                if batch_lag > 0:
+                    improvement = ((batch_lag - speed_lag) / batch_lag) * 100
+                    st.metric("🚀 Cải thiện", f"{improvement:.0f}%")
+            except:
+                st.info("Đang tính toán...")
+        else:
+            st.info("Chưa đủ data để so sánh")
+    
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# --- SECTION 2: MARKET INTELLIGENCE ---
 st.markdown("""
 <div class="section-card">
     <div class="section-title">
@@ -637,7 +619,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-tab1, tab2, tab3 = st.tabs(["📍 Phân tích vùng", "📈 Xu hướng thị trường", "🏠 Chi tiết BĐS"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📍 Phân tích vùng", "📈 Xu hướng thị trường", "🛏️ Phân tích phòng ngủ", "🏠 Chi tiết BĐS", "⚡ Speed vs Batch"])
 
 with tab1:
     col_left, col_right = st.columns([2, 1])
@@ -645,20 +627,17 @@ with tab1:
     with col_left:
         st.markdown("#### 🌡️ Bản đồ nhiệt giá theo khu vực")
         if not df_loc.empty:
-            chart = alt.Chart(df_loc).mark_bar(
-                cornerRadiusTopRight=8,
-                cornerRadiusBottomRight=8
-            ).encode(
+            chart = alt.Chart(df_loc).mark_bar(cornerRadiusTopRight=8, cornerRadiusBottomRight=8).encode(
                 x=alt.X('avg_price:Q', axis=alt.Axis(format='$,d'), title="Giá trung bình ($)"),
                 y=alt.Y('location:N', sort='-x', title="Khu vực"),
-                color=alt.Color('avg_price:Q', 
-                    scale=alt.Scale(scheme='viridis'),
-                    legend=alt.Legend(title="Giá", format='$,d')
-                ),
+                color=alt.Color('avg_price:Q', scale=alt.Scale(scheme='viridis')),
                 tooltip=[
                     alt.Tooltip('location:N', title='Khu vực'),
                     alt.Tooltip('avg_price:Q', title='Giá TB', format='$,.0f'),
-                    alt.Tooltip('n:Q', title='Số lượng')
+                    alt.Tooltip('total_houses:Q', title='Số BĐS'),
+                    alt.Tooltip('median_price:Q', title='Giá median', format='$,.0f'),
+                    alt.Tooltip('avg_price_per_sqft:Q', title='$/sqft', format='$,.2f'),
+                    alt.Tooltip('avg_house_age:Q', title='Tuổi TB', format='.1f')
                 ]
             ).properties(height=400)
             st.altair_chart(chart, use_container_width=True)
@@ -669,14 +648,12 @@ with tab1:
         st.markdown("#### 📊 Phân bố theo khu vực")
         if not df_loc.empty:
             pie_chart = alt.Chart(df_loc).mark_arc(innerRadius=50).encode(
-                theta=alt.Theta('n:Q', stack=True),
-                color=alt.Color('location:N', 
-                    scale=alt.Scale(scheme='tableau20'),
-                    legend=alt.Legend(title="Khu vực")
-                ),
+                theta=alt.Theta('total_houses:Q', stack=True),
+                color=alt.Color('location:N', scale=alt.Scale(scheme='tableau20')),
                 tooltip=[
                     alt.Tooltip('location:N', title='Khu vực'),
-                    alt.Tooltip('n:Q', title='Số lượng')
+                    alt.Tooltip('total_houses:Q', title='Số BĐS'),
+                    alt.Tooltip('avg_price:Q', title='Giá TB', format='$,.0f')
                 ]
             ).properties(height=350)
             st.altair_chart(pie_chart, use_container_width=True)
@@ -685,93 +662,111 @@ with tab2:
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("#### 📈 Xu hướng giá theo năm xây dựng")
-        if not df_trend.empty:
-            line = alt.Chart(df_trend).mark_line(
-                strokeWidth=3,
-                point=alt.OverlayMarkDef(size=80, filled=True)
-            ).encode(
-                x=alt.X('year_built:O', title="Năm xây dựng"),
+        st.markdown("#### 📈 Xu hướng giá theo thập kỷ xây dựng")
+        if not df_decade.empty:
+            line = alt.Chart(df_decade).mark_line(strokeWidth=3, point=alt.MarkConfig(size=80, filled=True)).encode(
+                x=alt.X('decade:O', title="Thập kỷ xây dựng"),
                 y=alt.Y('avg_price:Q', title="Giá trung bình ($)", axis=alt.Axis(format='$,d')),
-                color=alt.value('#667eea'),
                 tooltip=[
-                    alt.Tooltip('year_built:O', title='Năm'),
-                    alt.Tooltip('avg_price:Q', title='Giá TB', format='$,.0f')
+                    alt.Tooltip('decade:O', title='Thập kỷ'),
+                    alt.Tooltip('avg_price:Q', title='Giá TB', format='$,.0f'),
+                    alt.Tooltip('total_houses:Q', title='Số BĐS'),
+                    alt.Tooltip('avg_price_per_sqft:Q', title='$/sqft', format='$,.2f'),
+                    alt.Tooltip('avg_age:Q', title='Tuổi TB', format='.1f')
                 ]
             ).properties(height=350)
-            
-            # Add gradient area
-            area = alt.Chart(df_trend).mark_area(
-                opacity=0.3,
-                color=alt.Gradient(
-                    gradient='linear',
-                    stops=[
-                        alt.GradientStop(color='#667eea', offset=0),
-                        alt.GradientStop(color='transparent', offset=1)
-                    ],
-                    x1=1, x2=1, y1=1, y2=0
-                )
-            ).encode(
-                x=alt.X('year_built:O'),
-                y=alt.Y('avg_price:Q')
-            )
-            
-            st.altair_chart(area + line, use_container_width=True)
+            st.altair_chart(line, use_container_width=True)
         else:
             st.info("📈 Đang chờ dữ liệu xu hướng...")
     
     with col2:
-        st.markdown("#### 🏷️ Phân tích theo tình trạng")
-        if not filtered_df.empty:
-            cond_data = filtered_df.groupby('condition').agg({
-                'price': 'mean',
-                'sqft': 'count'
-            }).reset_index()
-            cond_data.columns = ['condition', 'avg_price', 'count']
-            
-            bars = alt.Chart(cond_data).mark_bar(
-                cornerRadiusTopLeft=8,
-                cornerRadiusTopRight=8
-            ).encode(
+        st.markdown("#### 🏷️ Phân tích theo tình trạng (Gold Layer)")
+        if not df_cond.empty:
+            bars = alt.Chart(df_cond).mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8).encode(
                 x=alt.X('condition:N', title="Tình trạng"),
                 y=alt.Y('avg_price:Q', title="Giá TB", axis=alt.Axis(format='$,d')),
-                color=alt.Color('condition:N', scale=alt.Scale(scheme='plasma'), legend=None),
+                color=alt.Color('avg_condition_score:Q', scale=alt.Scale(scheme='plasma'), legend=alt.Legend(title='Điểm TT')),
                 tooltip=[
                     alt.Tooltip('condition:N', title='Tình trạng'),
                     alt.Tooltip('avg_price:Q', title='Giá TB', format='$,.0f'),
-                    alt.Tooltip('count:Q', title='Số lượng')
+                    alt.Tooltip('total_houses:Q', title='Số BĐS'),
+                    alt.Tooltip('median_price:Q', title='Giá median', format='$,.0f'),
+                    alt.Tooltip('avg_price_per_sqft:Q', title='$/sqft', format='$,.2f'),
+                    alt.Tooltip('avg_condition_score:Q', title='Điểm TT', format='.2f')
                 ]
             ).properties(height=350)
             st.altair_chart(bars, use_container_width=True)
+        else:
+            st.info("🏷️ Đang chờ dữ liệu tình trạng...")
 
 with tab3:
-    st.markdown("#### 🔍 Phân tích chi tiết bất động sản")
+    st.markdown("#### �️ Phân tích giá theo số phòng ngủ")
+    
+    bed_col1, bed_col2 = st.columns(2)
+    
+    with bed_col1:
+        if not df_bedroom.empty:
+            st.markdown("**Giá trung bình theo số phòng ngủ**")
+            bedroom_bar = alt.Chart(df_bedroom).mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8).encode(
+                x=alt.X('bedrooms:O', title="Số phòng ngủ"),
+                y=alt.Y('avg_price:Q', title="Giá TB ($)", axis=alt.Axis(format='$,d')),
+                color=alt.Color('avg_price:Q', scale=alt.Scale(scheme='goldred'), legend=None),
+                tooltip=[
+                    alt.Tooltip('bedrooms:O', title='Phòng ngủ'),
+                    alt.Tooltip('avg_price:Q', title='Giá TB', format='$,.0f'),
+                    alt.Tooltip('total_houses:Q', title='Số BĐS'),
+                    alt.Tooltip('median_price:Q', title='Giá median', format='$,.0f'),
+                    alt.Tooltip('avg_sqft:Q', title='DT TB', format=',.0f')
+                ]
+            ).properties(height=350)
+            st.altair_chart(bedroom_bar, use_container_width=True)
+        else:
+            st.info("🛏️ Chưa có dữ liệu phòng ngủ")
+    
+    with bed_col2:
+        if not df_bedroom.empty:
+            st.markdown("**Price per Sqft theo phòng ngủ**")
+            price_sqft_line = alt.Chart(df_bedroom).mark_line(strokeWidth=3, point=True).encode(
+                x=alt.X('bedrooms:O', title="Số phòng ngủ"),
+                y=alt.Y('avg_price_per_sqft:Q', title="$/sqft", axis=alt.Axis(format='$,.2f')),
+                tooltip=[
+                    alt.Tooltip('bedrooms:O', title='Phòng ngủ'),
+                    alt.Tooltip('avg_price_per_sqft:Q', title='$/sqft', format='$,.2f'),
+                    alt.Tooltip('avg_total_rooms:Q', title='Tổng phòng TB', format='.1f')
+                ]
+            ).properties(height=350)
+            st.altair_chart(price_sqft_line, use_container_width=True)
+    
+    # Bảng chi tiết
+    if not df_bedroom.empty:
+        st.markdown("**📊 Bảng thống kê chi tiết**")
+        bed_display = df_bedroom[['bedrooms', 'total_houses', 'avg_price', 'median_price', 'min_price', 'max_price', 'avg_sqft', 'avg_price_per_sqft']].copy()
+        bed_display.columns = ['🛏️ PN', '🏘️ Số BĐS', '💰 Giá TB', '📊 Median', '⬇️ Min', '⬆️ Max', '📐 DT TB', '💵 $/sqft']
+        bed_display['💰 Giá TB'] = bed_display['💰 Giá TB'].apply(lambda x: f"${x:,.0f}")
+        bed_display['📊 Median'] = bed_display['📊 Median'].apply(lambda x: f"${x:,.0f}")
+        bed_display['⬇️ Min'] = bed_display['⬇️ Min'].apply(lambda x: f"${x:,.0f}")
+        bed_display['⬆️ Max'] = bed_display['⬆️ Max'].apply(lambda x: f"${x:,.0f}")
+        bed_display['📐 DT TB'] = bed_display['📐 DT TB'].apply(lambda x: f"{x:,.0f}")
+        bed_display['💵 $/sqft'] = bed_display['💵 $/sqft'].apply(lambda x: f"${x:.2f}")
+        st.dataframe(bed_display, hide_index=True, use_container_width=True)
+
+with tab4:
+    st.markdown("#### �🔍 Phân tích chi tiết bất động sản")
     c1, c2 = st.columns([2, 1])
     
     with c1:
         if not filtered_df.empty:
             st.markdown("**Tương quan Giá vs Diện tích** (Màu theo tình trạng)")
-            scatter = alt.Chart(filtered_df).mark_circle(
-                opacity=0.7,
-                stroke='white',
-                strokeWidth=1
-            ).encode(
+            scatter = alt.Chart(filtered_df).mark_circle(opacity=0.7).encode(
                 x=alt.X('sqft:Q', title="Diện tích (Sqft)", scale=alt.Scale(zero=False)),
                 y=alt.Y('price:Q', title="Giá ($)", axis=alt.Axis(format='$,d')),
-                color=alt.Color('condition:N', 
-                    scale=alt.Scale(scheme='category10'),
-                    legend=alt.Legend(title="Tình trạng", orient='bottom')
-                ),
-                size=alt.Size('bedrooms:Q', 
-                    scale=alt.Scale(range=[50, 300]),
-                    legend=alt.Legend(title="Số phòng ngủ")
-                ),
+                color=alt.Color('condition:N', scale=alt.Scale(scheme='category10')),
+                size=alt.Size('bedrooms:Q', scale=alt.Scale(range=[50, 300])),
                 tooltip=[
                     alt.Tooltip('location:N', title='Khu vực'),
                     alt.Tooltip('price:Q', title='Giá', format='$,.0f'),
                     alt.Tooltip('sqft:Q', title='Diện tích', format=',.0f'),
                     alt.Tooltip('bedrooms:Q', title='Phòng ngủ'),
-                    alt.Tooltip('bathrooms:Q', title='Phòng tắm'),
                     alt.Tooltip('condition:N', title='Tình trạng')
                 ]
             ).interactive().properties(height=450)
@@ -784,20 +779,56 @@ with tab3:
         if not filtered_df.empty:
             display_df = filtered_df[['location', 'price', 'sqft', 'bedrooms', 'condition']].head(12)
             display_df = display_df.rename(columns={
-                'location': '📍 Vị trí',
-                'price': '💰 Giá',
-                'sqft': '📐 DT',
-                'bedrooms': '🛏️ PN',
-                'condition': '⭐ TT'
+                'location': '📍 Vị trí', 'price': '💰 Giá', 'sqft': '📐 DT', 'bedrooms': '🛏️ PN', 'condition': '⭐ TT'
             })
             display_df['💰 Giá'] = display_df['💰 Giá'].apply(lambda x: f"${x:,.0f}")
-            display_df['📐 DT'] = display_df['📐 DT'].apply(lambda x: f"{x:,.0f}")
-            st.dataframe(
-                display_df, 
-                hide_index=True, 
-                use_container_width=True,
-                height=400
-            )
+            st.dataframe(display_df, hide_index=True, use_container_width=True, height=400)
+
+with tab5:
+    st.markdown("#### ⚡ So Sánh Speed Layer vs Batch Layer")
+    
+    comp_col1, comp_col2 = st.columns(2)
+    
+    with comp_col1:
+        st.markdown("**🏆 Lambda Architecture Benefits**")
+        
+        comparison_data = pd.DataFrame({
+            'Metric': ['Latency', 'Accuracy', 'Volume', 'Complexity'],
+            'Speed Layer': [10, 75, len(df_speed), 'Low'],
+            'Batch Layer': [300, 95, len(df_fact), 'High']
+        })
+        st.dataframe(comparison_data, hide_index=True, use_container_width=True)
+        
+        st.markdown("""
+        **Speed Layer (Real-time):**
+        - ✅ Latency <10 giây
+        - ✅ Domain-based cleaning
+        - ⚠️ No ML predictions
+        
+        **Batch Layer (High Accuracy):**
+        - ✅ Statistical cleaning
+        - ✅ ML predictions
+        - ⚠️ Latency vài phút
+        """)
+    
+    with comp_col2:
+        st.markdown("**📊 Data Distribution**")
+        
+        if not df_speed.empty or not df_fact.empty:
+            source_data = pd.DataFrame({
+                'Source': ['Speed Layer', 'Batch Layer'],
+                'Count': [len(df_speed), len(df_fact)]
+            })
+            
+            pie = alt.Chart(source_data).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta('Count:Q'),
+                color=alt.Color('Source:N', scale=alt.Scale(domain=['Speed Layer', 'Batch Layer'], range=['#ff6b6b', '#667eea'])),
+                tooltip=[alt.Tooltip('Source:N', title='Source'), alt.Tooltip('Count:Q', title='Records')]
+            ).properties(height=250)
+            st.altair_chart(pie, use_container_width=True)
+        
+        st.markdown("**🔄 Best of Both Worlds**")
+        st.info("Dashboard merge Speed + Batch để có cả low latency VÀ high accuracy!")
 
 # --- SECTION 4: AI VALUATION (ML) ---
 st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
@@ -816,19 +847,12 @@ m1, m2, m3 = st.columns([2, 2, 1])
 with m1:
     st.markdown("#### 🎯 Độ chính xác: Giá thực vs Dự đoán")
     if not df_pred.empty:
-        # Calculate metrics
-        mae = abs(df_pred['predicted_price'] - df_pred['actual_price']).mean()
-        mape = (abs(df_pred['predicted_price'] - df_pred['actual_price']) / df_pred['actual_price']).mean() * 100
-        
         base = alt.Chart(df_pred).encode(
             x=alt.X('actual_price:Q', title="Actual Price ($)", axis=alt.Axis(format='$,d')),
             y=alt.Y('predicted_price:Q', title="Predicted Price ($)", axis=alt.Axis(format='$,d'))
         )
         
-        points = base.mark_circle(
-            opacity=0.6,
-            size=60
-        ).encode(
+        points = base.mark_circle(opacity=0.6, size=60).encode(
             color=alt.value('#00c853'),
             tooltip=[
                 alt.Tooltip('actual_price:Q', title='Giá thực', format='$,.0f'),
@@ -836,16 +860,11 @@ with m1:
             ]
         )
         
-        # Perfect prediction line
         min_val = min(df_pred['actual_price'].min(), df_pred['predicted_price'].min())
         max_val = max(df_pred['actual_price'].max(), df_pred['predicted_price'].max())
         line_df = pd.DataFrame({'x': [min_val, max_val], 'y': [min_val, max_val]})
         
-        line = alt.Chart(line_df).mark_line(
-            strokeDash=[8, 4],
-            strokeWidth=2,
-            color='#ff6b6b'
-        ).encode(x='x:Q', y='y:Q')
+        line = alt.Chart(line_df).mark_line(strokeDash=[8, 4], strokeWidth=2, color='#ff6b6b').encode(x='x:Q', y='y:Q')
         
         st.altair_chart((points + line).interactive(), use_container_width=True)
     else:
@@ -854,27 +873,13 @@ with m1:
 with m2:
     st.markdown("#### 📊 Phân bố sai số dự đoán")
     if not df_pred.empty:
-        df_pred['error'] = df_pred['predicted_price'] - df_pred['actual_price']
-        df_pred['error_pct'] = ((df_pred['predicted_price'] - df_pred['actual_price']) / df_pred['actual_price']) * 100
+        df_pred_copy = df_pred.copy()
+        df_pred_copy['error'] = df_pred_copy['predicted_price'] - df_pred_copy['actual_price']
         
-        hist = alt.Chart(df_pred).mark_bar(
-            cornerRadiusTopLeft=4,
-            cornerRadiusTopRight=4,
-            opacity=0.8
-        ).encode(
-            x=alt.X('error:Q', 
-                bin=alt.Bin(maxbins=25), 
-                title="Sai số dự đoán ($)"
-            ),
+        hist = alt.Chart(df_pred_copy).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, opacity=0.8).encode(
+            x=alt.X('error:Q', bin=alt.Bin(maxbins=25), title="Sai số dự đoán ($)"),
             y=alt.Y('count()', title="Tần suất"),
-            color=alt.condition(
-                alt.datum.error > 0,
-                alt.value('#ff6b6b'),  # Over-predicted
-                alt.value('#00c853')   # Under-predicted
-            ),
-            tooltip=[
-                alt.Tooltip('count()', title='Số lượng')
-            ]
+            color=alt.condition(alt.datum.error > 0, alt.value('#ff6b6b'), alt.value('#00c853'))
         ).properties(height=300)
         
         st.altair_chart(hist, use_container_width=True)
@@ -919,5 +924,5 @@ st.markdown("""
 
 # Auto-refresh logic
 if auto_refresh:
-    time.sleep(5)
+    time.sleep(2)  # Giảm xuống 2s để update nhanh hơn
     st.rerun()

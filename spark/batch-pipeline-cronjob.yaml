@@ -1,0 +1,738 @@
+# Job chạy ngay khi apply (chỉ 1 lần)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: batch-pipeline-init
+  namespace: spark
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: batch-pipeline
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: spark-batch
+          image: apache/spark:3.5.1
+          imagePullPolicy: IfNotPresent
+          
+          env:
+            - name: IVY_HOME
+              value: "/tmp/ivy2"
+          
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              
+              echo "=== Initial Batch Pipeline Run (Bronze → Silver → Gold) ==="
+              date
+              
+              # Copy code files
+              mkdir -p /tmp/jobs
+              cp /mnt/configmap/common.py /tmp/jobs/
+              cp /mnt/configmap/silver_job.py /tmp/jobs/
+              cp /mnt/configmap/gold_job.py /tmp/jobs/
+              
+              # Download PostgreSQL JDBC driver
+              echo "Downloading PostgreSQL JDBC driver..."
+              wget -q -O /opt/spark/jars/postgresql.jar \
+                https://jdbc.postgresql.org/download/postgresql-42.7.1.jar
+              
+              cd /tmp/jobs
+              
+              # Step 1: Bronze → Silver
+              echo "=== Step 1/2: Bronze → Silver ==="
+              /opt/spark/bin/spark-submit \
+                --master local[*] \
+                --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+                --conf spark.jars.ivy=/tmp/ivy2 \
+                --driver-memory 2g \
+                --executor-memory 2g \
+                --conf spark.hadoop.fs.s3a.endpoint=http://minio.minio.svc.cluster.local:9000 \
+                --conf spark.hadoop.fs.s3a.access.key=minioadmin \
+                --conf spark.hadoop.fs.s3a.secret.key=minioadmin \
+                --conf spark.hadoop.fs.s3a.path.style.access=true \
+                --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+                --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+                silver_job.py \
+                  --bucket house-lake \
+                  --bronze-prefix bronze \
+                  --silver-prefix silver \
+                  --input-format json \
+                  --write-postgres \
+                  --pg-url jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse \
+                  --pg-user postgres \
+                  --pg-password postgres \
+                  --pg-table fact_house \
+                  --pg-mode append \
+                  --dedup-strategy pg-max-offset
+              
+              SILVER_EXIT=$?
+              if [ $SILVER_EXIT -ne 0 ]; then
+                echo "ERROR: Silver job failed with exit code $SILVER_EXIT"
+                exit $SILVER_EXIT
+              fi
+              echo "✓ Silver job completed successfully"
+              
+              # Step 2: Silver → Gold (dùng lại jar từ Silver)
+              echo "=== Step 2/2: Silver → Gold ==="
+              /opt/spark/bin/spark-submit \
+                --master local[*] \
+                --jars /tmp/ivy2/jars/org.apache.hadoop_hadoop-aws-3.3.4.jar,/tmp/ivy2/jars/com.amazonaws_aws-java-sdk-bundle-1.12.262.jar \
+                --driver-memory 2g \
+                --executor-memory 2g \
+                --conf spark.hadoop.fs.s3a.endpoint=http://minio.minio.svc.cluster.local:9000 \
+                --conf spark.hadoop.fs.s3a.access.key=minioadmin \
+                --conf spark.hadoop.fs.s3a.secret.key=minioadmin \
+                --conf spark.hadoop.fs.s3a.path.style.access=true \
+                --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+                --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+                gold_job.py \
+                  --bucket house-lake \
+                  --silver-prefix silver \
+                  --gold-prefix gold \
+                  --write-postgres \
+                  --pg-url jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse \
+                  --pg-user postgres \
+                  --pg-password postgres
+              
+              GOLD_EXIT=$?
+              if [ $GOLD_EXIT -ne 0 ]; then
+                echo "ERROR: Gold job failed with exit code $GOLD_EXIT"
+                exit $GOLD_EXIT
+              fi
+              echo "✓ Gold job completed successfully"
+              
+              echo "=== Initial Batch Pipeline Completed Successfully ==="
+              date
+              exit 0
+          
+          env:
+            - name: MINIO_BUCKET
+              value: "house-lake"
+            - name: BRONZE_PREFIX
+              value: "bronze"
+            - name: SILVER_PREFIX
+              value: "silver"
+            - name: BRONZE_INPUT_FORMAT
+              value: "json"
+            - name: POSTGRES_JDBC_URL
+              value: "jdbc:postgresql://host.minikube.internal:5432/house_warehouse"
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              value: "12345678"
+            - name: SILVER_PG_TABLE
+              value: "fact_house"
+            - name: SILVER_PG_MODE
+              value: "append"
+            - name: SILVER_DEDUP_STRATEGY
+              value: "pg-max-offset"
+          
+          volumeMounts:
+            - name: batch-pipeline-config
+              mountPath: /mnt/configmap
+          
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+      
+      volumes:
+        - name: batch-pipeline-config
+          configMap:
+            name: batch-pipeline-config
+
+---
+# CronJob chạy định kỳ mỗi 10 phút
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: batch-pipeline
+  namespace: spark
+spec:
+  # Chạy mỗi 10 phút
+  schedule: "*/10 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid  # Không cho phép job chồng lấp
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: batch-pipeline
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: spark-batch
+              image: apache/spark:3.5.1
+              imagePullPolicy: IfNotPresent
+              
+              env:
+                - name: IVY_HOME
+                  value: "/tmp/ivy2"
+              
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  
+                  echo "=== Batch Pipeline Starting (Bronze → Silver → Gold) ==="
+                  date
+                  
+                  # Copy code files
+                  mkdir -p /tmp/jobs
+                  cp /mnt/configmap/common.py /tmp/jobs/
+                  cp /mnt/configmap/silver_job.py /tmp/jobs/
+                  cp /mnt/configmap/gold_job.py /tmp/jobs/
+                  
+                  # Download PostgreSQL JDBC driver
+                  echo "Downloading PostgreSQL JDBC driver..."
+                  wget -q -O /opt/spark/jars/postgresql.jar \
+                    https://jdbc.postgresql.org/download/postgresql-42.7.1.jar
+                  
+                  cd /tmp/jobs
+                  
+                  # Step 1: Bronze → Silver
+                  echo "=== Step 1/2: Bronze → Silver ==="
+                  /opt/spark/bin/spark-submit \
+                    --master local[*] \
+                    --driver-memory 2g \
+                    --executor-memory 2g \
+                    --conf spark.hadoop.fs.s3a.endpoint=http://minio.minio.svc.cluster.local:9000 \
+                    --conf spark.hadoop.fs.s3a.access.key=minioadmin \
+                    --conf spark.hadoop.fs.s3a.secret.key=minioadmin \
+                    --conf spark.hadoop.fs.s3a.path.style.access=true \
+                    --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+                    silver_job.py \
+                      --bucket house-lake \
+                      --bronze-prefix bronze \
+                      --silver-prefix silver \
+                      --input-format json \
+                      --write-postgres \
+                      --pg-url jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse \
+                      --pg-user postgres \
+                      --pg-password postgres \
+                      --pg-table fact_house \
+                      --pg-mode append \
+                      --dedup-strategy pg-max-offset
+                  
+                  SILVER_EXIT=$?
+                  if [ $SILVER_EXIT -ne 0 ]; then
+                    echo "ERROR: Silver job failed with exit code $SILVER_EXIT"
+                    exit $SILVER_EXIT
+                  fi
+                  echo "✓ Silver job completed successfully"
+                  
+                  # Step 2: Silver → Gold
+                  echo "=== Step 2/2: Silver → Gold ==="
+                  /opt/spark/bin/spark-submit \
+                    --master local[*] \
+                    --driver-memory 2g \
+                    --executor-memory 2g \
+                    --conf spark.hadoop.fs.s3a.endpoint=http://minio.minio.svc.cluster.local:9000 \
+                    --conf spark.hadoop.fs.s3a.access.key=minioadmin \
+                    --conf spark.hadoop.fs.s3a.secret.key=minioadmin \
+                    --conf spark.hadoop.fs.s3a.path.style.access=true \
+                    --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+                    gold_job.py \
+                      --bucket house-lake \
+                      --silver-prefix silver \
+                      --gold-prefix gold \
+                      --write-postgres \
+                      --pg-url jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse \
+                      --pg-user postgres \
+                      --pg-password postgres
+                  
+                  GOLD_EXIT=$?
+                  if [ $GOLD_EXIT -ne 0 ]; then
+                    echo "ERROR: Gold job failed with exit code $GOLD_EXIT"
+                    exit $GOLD_EXIT
+                  fi
+                  echo "✓ Gold job completed successfully"
+                  
+                  echo "=== Batch Pipeline Completed Successfully ==="
+                  date
+                  exit 0
+              
+              env:
+                - name: MINIO_BUCKET
+                  value: "house-lake"
+                - name: BRONZE_PREFIX
+                  value: "bronze"
+                - name: SILVER_PREFIX
+                  value: "silver"
+                - name: BRONZE_INPUT_FORMAT
+                  value: "json"
+                - name: POSTGRES_JDBC_URL
+                  value: "jdbc:postgresql://host.minikube.internal:5432/house_warehouse"
+                - name: POSTGRES_USER
+                  value: "postgres"
+                - name: POSTGRES_PASSWORD
+                  value: "12345678"
+                - name: SILVER_PG_TABLE
+                  value: "fact_house"
+                - name: SILVER_PG_MODE
+                  value: "append"
+                - name: SILVER_DEDUP_STRATEGY
+                  value: "pg-max-offset"
+              
+              volumeMounts:
+                - name: batch-pipeline-config
+                  mountPath: /mnt/configmap
+              
+              resources:
+                requests:
+                  memory: "2Gi"
+                  cpu: "1000m"
+                limits:
+                  memory: "4Gi"
+                  cpu: "2000m"
+          
+          volumes:
+            - name: batch-pipeline-config
+              configMap:
+                name: batch-pipeline-config
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: batch-pipeline-config
+  namespace: spark
+data:
+  common.py: |
+    import os
+    from pyspark.sql import SparkSession
+
+
+    def build_spark(app_name: str) -> SparkSession:
+        """
+        Build a SparkSession with S3A (MinIO) configuration.
+        Reads from environment variables or uses defaults.
+        """
+        minio_endpoint = os.getenv("MINIO_ENDPOINT", "http://minio.minio.svc.cluster.local:9000")
+        access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+        secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+
+        builder = (
+            SparkSession.builder.appName(app_name)
+            .config("spark.hadoop.fs.s3a.endpoint", minio_endpoint)
+            .config("spark.hadoop.fs.s3a.access.key", access_key)
+            .config("spark.hadoop.fs.s3a.secret.key", secret_key)
+            .config("spark.hadoop.fs.s3a.path.style.access", "true")
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+            .config("spark.sql.adaptive.enabled", "true")
+        )
+
+        return builder.getOrCreate()
+
+  silver_job.py: |
+    import argparse
+    import os
+
+    from py4j.protocol import Py4JJavaError
+
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import (
+        DoubleType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    from common import build_spark
+
+
+    def _env(name: str, default: str) -> str:
+        v = os.getenv(name)
+        return v if v not in (None, "") else default
+
+
+    PAYLOAD_SCHEMA = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("price", IntegerType()),
+            StructField("sqft", IntegerType()),
+            StructField("bedrooms", IntegerType()),
+            StructField("bathrooms", DoubleType()),
+            StructField("location", StringType()),
+            StructField("year_built", IntegerType()),
+            StructField("condition", StringType()),
+        ]
+    )
+
+
+    def main():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--bucket", default=_env("MINIO_BUCKET", "hungluu-test-bucket"))
+        parser.add_argument("--bronze-prefix", default=_env("BRONZE_PREFIX", "bronze"))
+        parser.add_argument("--silver-prefix", default=_env("SILVER_PREFIX", "silver"))
+        parser.add_argument(
+            "--input-format",
+            choices=["json", "parquet"],
+            default=_env("BRONZE_INPUT_FORMAT", "json"),
+            help="How bronze was written: json (NDJSON) or parquet",
+        )
+
+        parser.add_argument("--write-postgres", action="store_true")
+        parser.add_argument(
+            "--pg-url",
+            default=_env(
+                "POSTGRES_JDBC_URL",
+                "jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse",
+            ),
+        )
+        parser.add_argument("--pg-user", default=_env("POSTGRES_USER", "postgres"))
+        parser.add_argument("--pg-password", default=_env("POSTGRES_PASSWORD", "postgres"))
+        parser.add_argument("--pg-table", default=_env("SILVER_PG_TABLE", "fact_house"))
+        parser.add_argument("--pg-mode", choices=["append", "overwrite"], default=_env("SILVER_PG_MODE", "append"))
+
+        parser.add_argument(
+            "--dedup-strategy",
+            choices=["none", "pg-max-offset"],
+            default=_env("SILVER_DEDUP_STRATEGY", "pg-max-offset"),
+            help="How to avoid reprocessing old Bronze data. 'pg-max-offset' uses fact_house in Postgres as state.",
+        )
+
+        args = parser.parse_args()
+
+        spark = build_spark("silver_job")
+
+        bronze_path = f"s3a://{args.bucket}/{args.bronze_prefix}/"
+        silver_path = f"s3a://{args.bucket}/{args.silver_prefix}/"
+
+        if args.input_format == "parquet":
+            df = spark.read.parquet(bronze_path)
+            if "payload" not in df.columns and "payload_json" in df.columns:
+                df = df.withColumn("payload", F.from_json(F.col("payload_json"), PAYLOAD_SCHEMA))
+        else:
+            # NDJSON files produced by the Kafka bronze consumer
+            df = spark.read.json(bronze_path)
+
+        if "payload" not in df.columns:
+            raise RuntimeError("Bronze data must contain 'payload' struct or 'payload_json' column")
+
+        # Flatten payload (keep Kafka metadata for dedup, but we will drop them from final output)
+        df = df.select(
+            F.col("ingest_time_utc"),
+            F.col("topic"),
+            F.col("partition"),
+            F.col("offset"),
+            F.col("kafka_timestamp_ms"),
+            F.col("payload.*"),
+        )
+
+        # Cast types + normalize
+        df = (
+            df.withColumn("id", F.col("id").cast(IntegerType()))
+            .withColumn("price", F.col("price").cast(IntegerType()))
+            .withColumn("sqft", F.col("sqft").cast(IntegerType()))
+            .withColumn("bedrooms", F.col("bedrooms").cast(IntegerType()))
+            .withColumn("bathrooms", F.col("bathrooms").cast(DoubleType()))
+            .withColumn("year_built", F.col("year_built").cast(IntegerType()))
+            .withColumn("location", F.initcap(F.lower(F.trim(F.col("location")))))
+            .withColumn("condition", F.initcap(F.lower(F.trim(F.col("condition")))))
+        )
+
+        # Minimal null-handling: drop critical nulls, fill the rest
+        df = df.dropna(subset=["price", "location", "year_built"]).fillna(
+            {
+                "sqft": 0,
+                "bedrooms": 0,
+                "bathrooms": 0.0,
+                "condition": "Unknown",
+            }
+        )
+
+        # Dedup within this batch by Kafka identity
+        df = df.dropDuplicates(["topic", "partition", "offset"])
+        
+        # Dedup by business key (handle producer restart sending same data)
+        # Keep the LATEST record (highest offset) for each unique house
+        from pyspark.sql.window import Window
+        window_spec = Window.partitionBy("id", "price", "sqft", "location", "year_built").orderBy(F.col("offset").desc())
+        df = df.withColumn("_row_num", F.row_number().over(window_spec)) \
+               .filter(F.col("_row_num") == 1) \
+               .drop("_row_num")
+
+        normalized = F.regexp_replace(
+            F.regexp_replace(F.col("ingest_time_utc"), "T", " "),
+            r"(Z|[+-]\d\d:?\d\d)$",
+            "",
+        )
+
+        created_ts = F.coalesce(
+            F.to_timestamp(normalized, "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+            F.to_timestamp(normalized, "yyyy-MM-dd HH:mm:ss.SSS"),
+            F.to_timestamp(normalized, "yyyy-MM-dd HH:mm:ss"),
+        )
+
+        created_at_from_ts = F.concat(
+            F.date_format(created_ts, "yyyy-MM-dd HH:mm:ss"),
+            F.lit("."),
+            F.lpad(((F.unix_micros(created_ts) % F.lit(1000000))).cast("string"), 6, "0"),
+        )
+
+        frac = F.regexp_extract(normalized, r"\\.(\\d{1,6})$", 1)
+        base = F.regexp_replace(normalized, r"\\.\\d{1,6}$", "")
+        created_at_fallback = F.when(
+            frac != "",
+            F.concat(base, F.lit("."), F.lpad(frac, 6, "0")),
+        ).otherwise(F.concat(normalized, F.lit(".000000")))
+
+        created_at = F.when(created_ts.isNotNull(), created_at_from_ts).otherwise(created_at_fallback)
+
+        df = df.withColumn("created_at", created_at)
+
+        # Optional incremental filter: if Postgres fact table already has offsets,
+        # only process records with offset > max(offset) per (topic, partition).
+        if args.write_postgres and args.pg_mode == "append" and args.dedup_strategy == "pg-max-offset":
+            def _quote_ident(name: str) -> str:
+                return '"' + name.replace('"', '""') + '"'
+
+            def _quote_table(ident: str) -> str:
+                parts = [p for p in ident.split(".") if p]
+                return ".".join(_quote_ident(p) for p in parts) if parts else _quote_ident(ident)
+
+            table_expr = _quote_table(args.pg_table)
+            max_offset_query = (
+                f"(SELECT {_quote_ident('topic')} AS topic, {_quote_ident('partition')} AS partition, "
+                f"MAX({_quote_ident('offset')}) AS max_offset "
+                f"FROM {table_expr} GROUP BY {_quote_ident('topic')}, {_quote_ident('partition')}) t"
+            )
+
+            props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}
+            try:
+                state = spark.read.jdbc(url=args.pg_url, table=max_offset_query, properties=props)
+
+                df = (
+                    df.join(state, on=["topic", "partition"], how="left")
+                    .where((F.col("max_offset").isNull()) | (F.col("offset") > F.col("max_offset")))
+                    .drop("max_offset")
+                )
+            except Py4JJavaError:
+                # Table doesn't exist yet (first run) or schema mismatch: treat as no state.
+                pass
+
+        # ===== FEATURE ENGINEERING (minimal - analysis only) =====
+        # Chỉ tính toán các features hữu ích cho analysis/dashboard
+        # ML code sẽ tự tính toán features riêng để đảm bảo consistency
+        
+        df = df.withColumn("price_per_sqft", F.col("price") / (F.col("sqft") + 0.1))
+        df = df.withColumn("house_age", F.lit(2026) - F.col("year_built"))
+        df = df.withColumn("total_rooms", F.col("bedrooms") + F.col("bathrooms"))
+        df = df.withColumn(
+            "condition_score",
+            F.when(F.col("condition") == "Excellent", 3)
+            .when(F.col("condition") == "Good", 2)
+            .when(F.col("condition") == "Fair", 1)
+            .otherwise(0)
+        )
+
+        # Silver lake schema: clean data + basic derived features
+        df_silver = df.select(
+            F.col("created_at"),
+            F.col("id"),
+            F.col("price"),
+            F.col("sqft"),
+            F.col("bedrooms"),
+            F.col("bathrooms"),
+            F.col("location"),
+            F.col("year_built"),
+            F.col("condition"),
+            # Derived features (for analysis)
+            F.col("price_per_sqft"),
+            F.col("house_age"),
+            F.col("total_rooms"),
+            F.col("condition_score"),
+        )
+
+        df_silver.write.mode("append").parquet(silver_path)
+
+        if args.write_postgres:
+            # Postgres fact table: keep Kafka identity columns to support incremental processing.
+            df_fact = df.select(
+                F.col("topic"),
+                F.col("partition"),
+                F.col("offset"),
+                F.col("created_at"),
+                F.col("id"),
+                F.col("price"),
+                F.col("sqft"),
+                F.col("bedrooms"),
+                F.col("bathrooms"),
+                F.col("location"),
+                F.col("year_built"),
+                F.col("condition"),
+            )
+
+            props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}
+            df_fact.write.mode(args.pg_mode).jdbc(url=args.pg_url, table=args.pg_table, properties=props)
+
+        spark.stop()
+
+
+    if __name__ == "__main__":
+        main()
+
+  gold_job.py: |
+    import argparse
+    import os
+
+    from pyspark.sql import functions as F
+
+    from common import build_spark
+
+
+    def _env(name: str, default: str) -> str:
+        v = os.getenv(name)
+        return v if v not in (None, "") else default
+
+
+    def main():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--bucket", default=_env("MINIO_BUCKET", "hungluu-test-bucket"))
+        parser.add_argument("--silver-prefix", default=_env("SILVER_PREFIX", "silver"))
+        parser.add_argument("--gold-prefix", default=_env("GOLD_PREFIX", "gold"))
+
+        parser.add_argument("--write-postgres", action="store_true")
+        parser.add_argument(
+            "--pg-url",
+            default=_env(
+                "POSTGRES_JDBC_URL",
+                "jdbc:postgresql://postgres.postgres.svc.cluster.local:5432/house_warehouse",
+            ),
+        )
+        parser.add_argument("--pg-user", default=_env("POSTGRES_USER", "postgres"))
+        parser.add_argument("--pg-password", default=_env("POSTGRES_PASSWORD", "postgres"))
+
+        args = parser.parse_args()
+
+        spark = build_spark("gold_job")
+
+        silver_path = f"s3a://{args.bucket}/{args.silver_prefix}/"
+        gold_base = f"s3a://{args.bucket}/{args.gold_prefix}/"
+
+        df = spark.read.parquet(silver_path)
+
+        # ===== GOLD AGGREGATIONS (4 BẢNG CHÍNH) =====
+        
+        # 1. Location Stats - Thống kê theo vị trí
+        gold_location_stats = (
+            df.groupBy("location")
+            .agg(
+                F.count("*").alias("total_houses"),
+                F.avg("price").alias("avg_price"),
+                F.stddev("price").alias("std_price"),
+                F.percentile_approx("price", 0.50).alias("median_price"),
+                F.min("price").alias("min_price"),
+                F.max("price").alias("max_price"),
+                F.avg("sqft").alias("avg_sqft"),
+                F.avg("bedrooms").alias("avg_bedrooms"),
+                F.avg("bathrooms").alias("avg_bathrooms"),
+                F.avg("price_per_sqft").alias("avg_price_per_sqft"),
+                F.avg("house_age").alias("avg_house_age"),
+            )
+            .withColumn("as_of_utc", F.current_timestamp())
+        )
+
+        # 2. Condition Quality - Thống kê theo tình trạng nhà
+        gold_condition_stats = (
+            df.groupBy("condition")
+            .agg(
+                F.count("*").alias("total_houses"),
+                F.avg("price").alias("avg_price"),
+                F.percentile_approx("price", 0.50).alias("median_price"),
+                F.avg("price_per_sqft").alias("avg_price_per_sqft"),
+                F.avg("house_age").alias("avg_house_age"),
+                F.avg("sqft").alias("avg_sqft"),
+                F.avg("condition_score").alias("avg_condition_score"),
+            )
+            .withColumn("as_of_utc", F.current_timestamp())
+        )
+
+        # 3. Price by Bedrooms - Phân tích theo số phòng ngủ
+        gold_bedroom_analysis = (
+            df.groupBy("bedrooms")
+            .agg(
+                F.count("*").alias("total_houses"),
+                F.avg("price").alias("avg_price"),
+                F.percentile_approx("price", 0.50).alias("median_price"),
+                F.min("price").alias("min_price"),
+                F.max("price").alias("max_price"),
+                F.avg("sqft").alias("avg_sqft"),
+                F.avg("price_per_sqft").alias("avg_price_per_sqft"),
+                F.avg("total_rooms").alias("avg_total_rooms"),
+            )
+            .filter(F.col("bedrooms") > 0)
+            .orderBy("bedrooms")
+            .withColumn("as_of_utc", F.current_timestamp())
+        )
+
+        # 4. Year Built Trends - xu hướng giá theo năm xây dựng
+        gold_year_built_trends = (
+            df.withColumn("decade", (F.floor(F.col("year_built") / 10) * 10).cast("int"))
+            .groupBy("decade")
+            .agg(
+                F.count("*").alias("total_houses"),
+                F.avg("price").alias("avg_price"),
+                F.avg("price_per_sqft").alias("avg_price_per_sqft"),
+                F.avg("sqft").alias("avg_sqft"),
+                F.avg("house_age").alias("avg_age"),
+                F.percentile_approx("price", 0.50).alias("median_price"),
+            )
+            .orderBy("decade")
+            .withColumn("as_of_utc", F.current_timestamp())
+        )
+
+        # Write to MinIO
+        gold_location_path = f"{gold_base}/location_stats/"
+        gold_condition_path = f"{gold_base}/condition_stats/"
+        gold_bedroom_path = f"{gold_base}/bedroom_analysis/"
+        gold_year_trends_path = f"{gold_base}/year_built_trends/"
+
+        gold_location_stats.write.mode("overwrite").parquet(gold_location_path)
+        gold_condition_stats.write.mode("overwrite").parquet(gold_condition_path)
+        gold_bedroom_analysis.write.mode("overwrite").parquet(gold_bedroom_path)
+        gold_year_built_trends.write.mode("overwrite").parquet(gold_year_trends_path)
+
+        if args.write_postgres:
+            props = {"user": args.pg_user, "password": args.pg_password, "driver": "org.postgresql.Driver"}
+
+            gold_location_stats.write.mode("overwrite").jdbc(
+                url=args.pg_url,
+                table="gold_location_stats",
+                properties=props,
+            )
+            gold_condition_stats.write.mode("overwrite").jdbc(
+                url=args.pg_url,
+                table="gold_condition_stats",
+                properties=props,
+            )
+            gold_bedroom_analysis.write.mode("overwrite").jdbc(
+                url=args.pg_url,
+                table="gold_bedroom_analysis",
+                properties=props,
+            )
+            gold_year_built_trends.write.mode("overwrite").jdbc(
+                url=args.pg_url,
+                table="gold_year_built_trends",
+                properties=props,
+            )
+
+        spark.stop()
+
+
+    if __name__ == "__main__":
+        main()

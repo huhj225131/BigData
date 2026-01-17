@@ -1,6 +1,6 @@
-# 🚀 QUICK START - Chạy Song Song 2 Pipeline
+# 🚀 QUICK START - BigData Pipeline
 
-Lambda Architecture: **Batch Layer + Speed Layer** chạy đồng thời
+**Lambda Architecture:** Batch Layer (CronJob) + Speed Layer (Streaming) chạy tự động
 
 ---
 
@@ -9,6 +9,7 @@ Lambda Architecture: **Batch Layer + Speed Layer** chạy đồng thời
 - ✅ Minikube running (`minikube start`)
 - ✅ kubectl configured
 - ✅ Đang ở thư mục root: `D:\2025.1\bigdata\btl_bigdata`
+- ✅ MinIO bucket `house-lake` đã tạo
 
 ---
 
@@ -29,10 +30,8 @@ kubectl create namespace kafka
 kubectl apply -f kafka/kafka.yaml
 kubectl wait --for=condition=Ready pod/kafka-0 -n kafka --timeout=120s
 
-# 1.4. Spark Runner
+# 1.4. Spark namespace (cho CronJobs)
 kubectl create namespace spark
-kubectl apply -f spark/spark-runner.k8s.yaml
-kubectl wait --for=condition=Ready pod/spark-runner -n spark --timeout=90s
 
 # 1.5. Kafka Flow (Producer + Consumer + Spark Streaming)
 kubectl apply -f kafka/flow.yaml
@@ -47,7 +46,7 @@ kubectl get pods -A | Select-String -Pattern "(kafka|minio|postgres|spark)"
 
 ---
 
-## 🔧 BƯỚC 2: Copy Code vào Pods
+## 🔧 BƯỚC 2: Copy Code vào Kafka Pods
 
 ```powershell
 # 2.1. Producer
@@ -63,13 +62,6 @@ kubectl cp kafka/upload_to_storage.py -n kafka "${POD_CON}:/app/upload_to_storag
 # 2.3. Spark Streaming
 $POD_STREAM = kubectl get pods -n kafka -l app=spark-streaming -o jsonpath='{.items[0].metadata.name}'
 kubectl cp spark_streaming/stream.py -n kafka "${POD_STREAM}:/app/stream.py"
-
-# 2.4. Spark Batch Jobs
-kubectl exec -n spark spark-runner -- mkdir -p /opt/project/jobs
-kubectl cp spark/jobs/common.py -n spark spark-runner:/opt/project/jobs/
-kubectl cp spark/jobs/silver_job.py -n spark spark-runner:/opt/project/jobs/
-kubectl cp spark/jobs/gold_job.py -n spark spark-runner:/opt/project/jobs/
-kubectl cp spark/jobs/ml_train_house_price.py -n spark spark-runner:/opt/project/jobs/
 
 Write-Host "✅ Code copied!" -ForegroundColor Green
 ```
@@ -90,9 +82,46 @@ kubectl -n minio port-forward svc/minio-public 9001:9001
 
 ---
 
-## 🚀 BƯỚC 4: Chạy Song Song 2 Pipeline
+## 🚀 BƯỚC 4: Deploy Spark Pipeline (Chạy ngay + Auto schedule)
 
-### MỞ 4 TERMINAL POWERSHELL MỚI:
+```powershell
+# Deploy Batch Pipeline + ML Pipeline (sẽ chạy ngay lập tức)
+kubectl apply -f spark/batch-pipeline-cronjob.yaml
+kubectl apply -f spark/house-price-train-job.yaml
+
+# Xem jobs đang chạy
+kubectl get jobs -n spark
+# OUTPUT:
+# batch-pipeline-init    0/1    5s
+# ml-train-init          0/1    3s
+
+# Xem logs real-time
+Write-Host "Watching Batch Pipeline Init..." -ForegroundColor Cyan
+kubectl logs -n spark -l job-name=batch-pipeline-init --tail=100 -f
+
+# Sau khi Batch xong, xem ML logs
+Write-Host "Watching ML Train Init..." -ForegroundColor Cyan
+kubectl logs -n spark -l job-name=ml-train-init --tail=100 -f
+
+# Verify CronJobs đã được tạo
+kubectl get cronjob -n spark
+# OUTPUT:
+# NAME                SCHEDULE      SUSPEND   ACTIVE   LAST SCHEDULE
+# batch-pipeline      */10 * * * *  False     0        2m
+# house-price-train   0 * * * *     False     0        5m
+```
+
+**Giải thích:**
+- ✅ `batch-pipeline-init` chạy ngay (Bronze → Silver → Gold)
+- ✅ `ml-train-init` chạy ngay (Train → Inference)
+- ⏰ `batch-pipeline` CronJob tự động chạy mỗi 10 phút
+- ⏰ `house-price-train` CronJob tự động chạy mỗi giờ
+
+---
+
+## 📡 BƯỚC 5: Chạy Kafka Producer & Consumer (Manual)
+
+### MỞ 3 TERMINAL POWERSHELL MỚI:
 
 ---
 
@@ -156,50 +185,6 @@ kubectl exec -it -n kafka $POD_STREAM -- /bin/bash -c "mkdir -p /tmp/ivy2 && /op
 
 ---
 
-### **TERMINAL 4: BATCH JOBS (Bronze → Silver → Gold)**
-
-```powershell
-cd D:\2025.1\bigdata\btl_bigdata
-
-# Đợi Producer/Consumer chạy 30 giây để có Bronze data
-Write-Host "Đợi Bronze data..." -ForegroundColor Yellow
-Start-Sleep -Seconds 30
-
-# 1. Silver Job (Bronze → Silver)
-Write-Host "`n[1/2] Running Silver Job..." -ForegroundColor Cyan
-kubectl exec -n spark spark-runner -- sh -c "MINIO_ENDPOINT=http://minio.minio.svc.cluster.local:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.7.1 /opt/project/jobs/silver_job.py --bucket house-lake --input-format json --write-postgres"
-
-Write-Host "✅ Silver completed!" -ForegroundColor Green
-
-# 2. Gold Job (Silver → Gold)
-Write-Host "`n[2/2] Running Gold Job..." -ForegroundColor Cyan
-kubectl exec -n spark spark-runner -- sh -c "MINIO_ENDPOINT=http://minio.minio.svc.cluster.local:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.7.1 /opt/project/jobs/gold_job.py --bucket house-lake --write-postgres"
-
-Write-Host "✅ Gold completed!" -ForegroundColor Green
-Write-Host "`n🎉 Batch pipeline finished!" -ForegroundColor Magenta
-```
-
----
-
-## 🤖 BƯỚC 5: ML Pipeline (Optional)
-
-```powershell
-# 5.1. Train Model
-kubectl apply -f spark/house-price-train-job.yaml
-kubectl wait --for=condition=complete -n spark job/house-price-train --timeout=600s
-kubectl logs -n spark job/house-price-train --tail=50
-
-# 5.2. Start Inference CronJob
-kubectl apply -f spark/house-price-inference-cronjob.yaml
-
-# 5.3. Trigger manual inference
-kubectl create job -n spark house-price-inference-manual --from=cronjob/house-price-inference
-kubectl wait --for=condition=complete -n spark job/house-price-inference-manual --timeout=600s
-kubectl logs -n spark job/house-price-inference-manual --tail=50
-```
-
----
-
 ## 📊 BƯỚC 6: Verify Data
 
 ### 6.1. Check MinIO (Browser)
@@ -248,17 +233,21 @@ SELECT COUNT(*), run_id FROM house_price_predictions GROUP BY run_id;
 
 ---
 
-## 🛑 BƯỚC 7: Stop Pipelines
+## 🛑 BƯỚC 7: Stop & Cleanup
 
 ```powershell
-# Stop Producer (Ctrl+C in Terminal 1)
-# Stop Consumer (Ctrl+C in Terminal 2)  
-# Stop Streaming (Ctrl+C in Terminal 3)
+# Stop Producer/Consumer/Streaming (Ctrl+C in các Terminal)
 
-# Stop ML CronJob
-kubectl delete cronjob -n spark house-price-inference
+# Pause CronJobs (không xóa, chỉ tạm dừng)
+kubectl patch cronjob batch-pipeline -n spark -p '{"spec":{"suspend":true}}'
+kubectl patch cronjob house-price-train -n spark -p '{"spec":{"suspend":true}}'
 
-# Scale down (optional)
+# Hoặc xóa hoàn toàn
+kubectl delete cronjob batch-pipeline house-price-train -n spark
+kubectl delete job batch-pipeline-init ml-train-init -n spark
+kubectl delete configmap batch-pipeline-config spark-ml-train-jobs -n spark
+
+# Scale down Kafka pods (optional)
 kubectl scale -n kafka deploy/producer-data --replicas=0
 kubectl scale -n kafka deploy/consumer-logger --replicas=0
 kubectl scale -n kafka deploy/spark-streaming --replicas=0
@@ -269,46 +258,43 @@ kubectl scale -n kafka deploy/spark-streaming --replicas=0
 ## 📈 Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   DATA SOURCE                           │
-│              Producer → Kafka (data-stream)             │
-└────────────────────┬────────────────────────────────────┘
-                     │
-        ┌────────────┴────────────┐
-        │                          │
-┌───────▼────────┐      ┌─────────▼──────────┐
-│  SPEED LAYER   │      │  BATCH LAYER       │
-│  (Real-time)   │      │  (High Accuracy)   │
-├────────────────┤      ├────────────────────┤
-│ Kafka          │      │ Consumer           │
-│   ↓            │      │   ↓                │
-│ Spark Stream   │      │ Bronze (MinIO)     │
-│   ↓            │      │   ↓                │
-│ PostgreSQL     │      │ Silver Job         │
-│ house_data_    │      │   ↓                │
-│ speed          │      │ Silver (MinIO+PG)  │
-│                │      │   ↓                │
-│ Latency: <10s  │      │ Gold Job           │
-│                │      │   ↓                │
-│                │      │ Gold (MinIO+PG)    │
-│                │      │   ↓                │
-│                │      │ ML Train           │
-│                │      │   ↓                │
-│                │      │ ML Inference       │
-│                │      │                    │
-│                │      │ Latency: hours     │
-└────────────────┘      └────────────────────┘
-         │                       │
-         └───────────┬───────────┘
-                     ▼
-         ┌───────────────────────┐
-         │   SERVING LAYER       │
-         │   PostgreSQL          │
-         │   - house_data_speed  │
-         │   - fact_house        │
-         │   - gold_*            │
-         │   - predictions       │
-         └───────────────────────┘
+┌──────────────────────────────────────────────────┐
+│         Producer → Kafka (data-stream)           │
+└─────────────┬────────────────────────────────────┘
+              │
+     ┌────────┴─────────┐
+     │                  │
+┌────▼──────┐   ┌───────▼────────────────────┐
+│  SPEED    │   │  BATCH LAYER (Auto)        │
+│  LAYER    │   │                            │
+│ (Manual)  │   │  Consumer → Bronze         │
+├───────────┤   │      ↓                     │
+│ Spark     │   │  [Init Job - chạy ngay]    │
+│ Streaming │   │  batch-pipeline-init       │
+│    ↓      │   │  - Silver (Clean+Features) │
+│ PostgreSQL│   │  - Gold (Aggregations)     │
+│ house_    │   │      ↓                     │
+│ data_speed│   │  [CronJob - mỗi 10 phút]   │
+│           │   │  batch-pipeline            │
+│ <10s      │   │      ↓                     │
+│           │   │  [Init Job - chạy ngay]    │
+│           │   │  ml-train-init             │
+│           │   │  - Train + Inference       │
+│           │   │      ↓                     │
+│           │   │  [CronJob - mỗi giờ]       │
+│           │   │  house-price-train         │
+└───────────┘   └────────────────────────────┘
+      │                    │
+      └────────┬───────────┘
+               ▼
+    ┌──────────────────────┐
+    │   PostgreSQL         │
+    │  - house_data_speed  │
+    │  - fact_house        │
+    │  - gold_* (4 tables) │
+    │  - ml_metrics        │
+    │  - predictions       │
+    └──────────────────────┘
 ```
 
 ---
@@ -343,31 +329,28 @@ kubectl logs -n kafka -l app=spark-streaming --tail=100
 
 ## 🎯 Success Criteria
 
-✅ **Speed Pipeline (Real-time):**
-- Producer gửi messages vào Kafka
-- Spark Streaming đọc và ghi PostgreSQL
-- `house_data_speed` table tăng real-time
-- Latency: < 10 seconds
+✅ **Init Jobs (Chạy ngay khi deploy):**
+- `batch-pipeline-init` hoàn thành: Bronze → Silver → Gold
+- `ml-train-init` hoàn thành: Train model → Inference
+- PostgreSQL có data trong `fact_house`, `gold_*`, `house_price_predictions`
 
-✅ **Batch Pipeline (Accuracy):**
-- Consumer ghi Bronze vào MinIO
-- Silver job tạo cleaned data
-- Gold job tạo aggregations
-- PostgreSQL có `fact_house` và `gold_*` tables
-- Latency: minutes
+✅ **CronJobs (Auto schedule):**
+- `batch-pipeline` CronJob tạo thành công (schedule: `*/10 * * * *`)
+- `house-price-train` CronJob tạo thành công (schedule: `0 * * * *`)
+- Jobs tự động chạy theo schedule
 
-✅ **ML Pipeline:**
-- Model trained và saved vào MinIO
-- Predictions generated và saved
-- PostgreSQL có `house_price_predictions`
+✅ **Speed Pipeline (Manual):**
+- Spark Streaming ghi data vào `house_data_speed`
+- Real-time latency < 10s
 
 ---
 
 ## 📝 Notes
 
-- **First run:** Bronze → Silver → Gold → ML Train → Inference
-- **Incremental runs:** Chỉ chạy Silver (sẽ process record mới), sau đó Gold, Inference
-- **Full refresh:** Delete MinIO folders và PostgreSQL tables, chạy lại từ đầu
-- **Performance:** Producer rate ~100-200 msg/batch, Consumer batch size 200
+- **Init Jobs:** Chạy 1 lần khi deploy, không retry tự động nếu fail
+- **CronJobs:** Tự động chạy theo schedule, có retry nếu fail
+- **Dedup strategy:** `pg-max-offset` - chỉ process offset mới từ Kafka
+- **Manual trigger:** `kubectl create job --from=cronjob/batch-pipeline manual-$(date +%s) -n spark`
+- **Performance:** Batch ~1-2 phút, ML ~5-10 phút
 
 **Happy Data Engineering! 🚀**
