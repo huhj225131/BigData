@@ -26,15 +26,19 @@ kubectl apply -f spark_streaming/spark-deployment.yaml
 .\setup_pipeline.ps1
 
 
-# 5. Chạy pipeline streaming
+# 5. Chạy pipeline streaming (chờ đến khi nào không có thêm bất kỳ dòng nào ngoài Code copied successfully! thì thành công)
 .\run_full_pipeline.ps1
+
 
 # 6. Deploy Dashboard & Predictor
 kubectl apply -f dashboard-deployment.yaml
 kubectl apply -f predict-deployment.yaml
 
+
 # 7. Port forward
 .\port_forward_all.ps1
+#Hiện tại do đã tạm comment k hiện port của dashboard hiện dl. Cầm thêm 1 đoạn #như sau để chạy dashboard local
+streamlit run .\dashboard.py
 
 # 8. Chạy luồng xử lý batch (chờ một hồi để có dữ liệu xử lý)
 kubectl apply -f spark/batch-pipeline-cronjob.yaml
