@@ -8,3 +8,5 @@ psycopg2-binary
 numpy
 scikit-learn
 requests
+pyspark==3.5.0
+minio

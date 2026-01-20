@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: house-predictor
+  namespace: default
+  labels:
+    app: house-predictor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: house-predictor
+  template:
+    metadata:
+      labels:
+        app: house-predictor
+    spec:
+      containers:
+      - name: predictor
+        image: huytq2809/house-predictor:latest
+        imagePullPolicy: Always  # Always pull latest from Docker Hub
+        ports:
+        - containerPort: 8502
+          name: streamlit
+        env:
+        - name: MINIO_ENDPOINT
+          value: "minio-public.minio.svc.cluster.local:9000"
+        - name: MINIO_ACCESS_KEY
+          value: "minioadmin"
+        - name: MINIO_SECRET_KEY
+          value: "minioadmin"
+        - name: MINIO_BUCKET
+          value: "house-lake"
+        - name: MODEL_PREFIX
+          value: "models/house_price"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: house-predictor
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    app: house-predictor
+  ports:
+  - port: 8502
+    targetPort: 8502
+    name: streamlit
