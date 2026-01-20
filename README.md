@@ -18,13 +18,16 @@ minikube start --memory=8192 --cpus=4
 kubectl apply -f postgres/postgres.yaml
 kubectl apply -f minio/config_minio.yaml
 kubectl apply -f kafka/kafka.yaml
+kubectl apply -f kafka/flow.yaml
 kubectl apply -f spark/spark-runner.k8s.yaml
+kubectl apply -f spark_streaming/spark-deployment.yaml
 
 # 4. Setup Kafka pipeline
 .\setup_pipeline.ps1
 
-# 5. Chạy Batch Processing (tạo Gold tables + ML model)
-kubectl apply -f spark/house-price-train-job.yaml
+
+# 5. Chạy pipeline streaming
+.\run_full_pipeline.ps1
 
 # 6. Deploy Dashboard & Predictor
 kubectl apply -f dashboard-deployment.yaml
@@ -32,6 +35,14 @@ kubectl apply -f predict-deployment.yaml
 
 # 7. Port forward
 .\port_forward_all.ps1
+
+# 8. Chạy luồng xử lý batch (chờ một hồi để có dữ liệu xử lý)
+kubectl apply -f spark/batch-pipeline-cronjob.yaml
+
+# 9. Chạy train ML model (sau task batch thì chạy)
+kubectl apply -f spark/house-price-train-job.yaml
+
+
 ```
 
 ---
@@ -58,7 +69,8 @@ kubectl delete -f spark/spark-runner.k8s.yaml
 kubectl delete -f kafka/kafka.yaml
 kubectl delete -f minio/config_minio.yaml
 kubectl delete -f postgres/postgres.yaml
-
+kubectl delete -f spark_streaming/spark-deployment.yaml
+kubectl delete -f kafka/flow.yaml
 # Xóa Minikube
 minikube delete
 ```

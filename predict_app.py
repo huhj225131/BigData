@@ -1,5 +1,5 @@
 """
-🤖 AI House Price Predictor
+AI House Price Predictor
 
 Chức năng:
 - Input: 6 thông tin cơ bản (sqft, bedrooms, bathrooms, year, location, condition)

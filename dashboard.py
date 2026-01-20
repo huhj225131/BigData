@@ -561,55 +561,18 @@ if not df_speed.empty:
     </div>
     """, unsafe_allow_html=True)
     
-    rt_col1, rt_col2 = st.columns([3, 1])
-    
-    with rt_col1:
-        st.markdown("#### 🔥 Dữ liệu mới nhất (Latency <10s)")
-        df_speed_display = df_speed.head(20)[['created_at', 'location', 'price', 'sqft', 'bedrooms', 'condition']]
-        df_speed_display = df_speed_display.rename(columns={
-            'created_at': '⏰ Thời gian',
-            'location': '📍 Vị trí',
-            'price': '💰 Giá',
-            'sqft': '📐 DT',
-            'bedrooms': '🛏️ PN',
-            'condition': '⭐ TT'
-        })
-        df_speed_display['💰 Giá'] = df_speed_display['💰 Giá'].apply(lambda x: f"${x:,.0f}")
-        st.dataframe(df_speed_display, hide_index=True, use_container_width=True, height=300)
-    
-    with rt_col2:
-        st.markdown("#### 📊 Latency So Sánh")
-        if not df_speed.empty and not df_fact.empty:
-            try:
-                now = pd.Timestamp.now(tz='UTC')
-                if df_speed['created_at'].dt.tz is None:
-                    df_speed_tz = df_speed.copy()
-                    df_speed_tz['created_at'] = pd.to_datetime(df_speed_tz['created_at']).dt.tz_localize('UTC')
-                else:
-                    df_speed_tz = df_speed
-                
-                if df_fact['created_at'].dt.tz is None:
-                    df_fact_tz = df_fact.copy()
-                    df_fact_tz['created_at'] = pd.to_datetime(df_fact_tz['created_at']).dt.tz_localize('UTC')
-                else:
-                    df_fact_tz = df_fact
-                
-                latest_speed = df_speed_tz['created_at'].max()
-                latest_batch = df_fact_tz['created_at'].max()
-                
-                speed_lag = (now - latest_speed).total_seconds()
-                batch_lag = (now - latest_batch).total_seconds()
-                
-                st.metric("⚡ Speed Lag", f"{speed_lag:.1f}s")
-                st.metric("📦 Batch Lag", f"{batch_lag/60:.1f}m")
-                
-                if batch_lag > 0:
-                    improvement = ((batch_lag - speed_lag) / batch_lag) * 100
-                    st.metric("🚀 Cải thiện", f"{improvement:.0f}%")
-            except:
-                st.info("Đang tính toán...")
-        else:
-            st.info("Chưa đủ data để so sánh")
+    st.markdown("#### 🔥 Dữ liệu mới nhất")
+    df_speed_display = df_speed.head(20)[['created_at', 'location', 'price', 'sqft', 'bedrooms', 'condition']]
+    df_speed_display = df_speed_display.rename(columns={
+        'created_at': '⏰ Thời gian',
+        'location': '📍 Vị trí',
+        'price': '💰 Giá',
+        'sqft': '📐 DT',
+        'bedrooms': '🛏️ PN',
+        'condition': '⭐ TT'
+    })
+    df_speed_display['💰 Giá'] = df_speed_display['💰 Giá'].apply(lambda x: f"${x:,.0f}")
+    st.dataframe(df_speed_display, hide_index=True, use_container_width=True, height=300)
     
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
 
