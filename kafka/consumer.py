@@ -15,7 +15,6 @@ def _env(name: str, default: str) -> str:
     return v if v not in (None, "") else default
 
 
-# --- CẤU HÌNH (ENV-FIRST) ---
 KAFKA_BROKER = _env("KAFKA_BROKER", "localhost:9092")
 TOPIC_NAME = _env("TOPIC_NAME", "data-stream")
 GROUP_ID = _env("GROUP_ID", "bronze_archiver")
