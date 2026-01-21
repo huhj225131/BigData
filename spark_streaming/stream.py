@@ -22,6 +22,7 @@ spark = SparkSession.builder \
     .config("spark.jars.packages", 
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
             "org.postgresql:postgresql:42.7.1") \
+    .config("spark.sql.session.timeZone", "Asia/Ho_Chi_Minh") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
@@ -65,18 +66,7 @@ cleaned_df = cleaned_df \
     .withColumn("location", initcap(lower(trim(col("location"))))) \
     .withColumn("condition", initcap(lower(trim(col("condition")))))
 
-# Bước C: Xử lý Outlier (IQR thay thế bằng Filter)
-# Trong streaming, IQR rất khó tính real-time. 
-# Thay vào đó ta dùng ngưỡng nghiệp vụ (Domain Knowledge) 
-# Ví dụ: Giá nhà thường từ 50k đến 5M, diện tích > 100 sqft
-lower_bound = 50000 
-upper_bound = 2000000 
 
-cleaned_df = cleaned_df.filter(
-    (col("price") >= lower_bound) & 
-    (col("price") <= upper_bound) &
-    (col("sqft") > 0)
-)
 
 
 

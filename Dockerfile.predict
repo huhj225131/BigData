@@ -1,0 +1,25 @@
+# Base image - same as Spark jobs in K8s
+FROM apache/spark:3.5.1
+
+USER root
+
+WORKDIR /app
+
+# Install Python dependencies
+RUN pip install --no-cache-dir streamlit altair psycopg2-binary minio pyspark==3.5.0
+
+# Copy application code
+COPY predict_app.py /app/predict_app.py
+
+# Expose Streamlit port
+EXPOSE 8502
+
+# Set environment variables for MinIO
+ENV MINIO_ENDPOINT=minio-public.minio.svc.cluster.local:9000
+ENV MINIO_ACCESS_KEY=minioadmin
+ENV MINIO_SECRET_KEY=minioadmin
+ENV MINIO_BUCKET=house-lake
+ENV MODEL_PREFIX=models/house_price
+
+# Run Streamlit app
+CMD ["streamlit", "run", "predict_app.py", "--server.port=8502", "--server.address=0.0.0.0"]

@@ -1,0 +1,25 @@
+# Base image - Same as Spark jobs (already in Minikube!)
+FROM apache/spark:3.5.1
+
+USER root
+
+WORKDIR /app
+
+# Install Python dependencies
+RUN pip install --no-cache-dir streamlit altair psycopg2-binary pandas plotly
+
+# Copy application code
+COPY dashboard.py /app/dashboard.py
+
+# Expose Streamlit port
+EXPOSE 8501
+
+# Set environment variables for PostgreSQL
+ENV POSTGRES_HOST=postgres.postgres.svc.cluster.local
+ENV POSTGRES_PORT=5432
+ENV POSTGRES_DB=house_warehouse
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres
+
+# Run Streamlit app
+CMD ["streamlit", "run", "dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]

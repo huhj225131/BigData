@@ -1,16 +1,16 @@
 """
-🤖 AI House Price Predictor
+AI House Price Predictor
 
 Chức năng:
 - Input: 6 thông tin cơ bản (sqft, bedrooms, bathrooms, year, location, condition)
 - Feature Engineering tự động: house_age, total_rooms, condition_score, price_per_sqft
-- Prediction: Mock model (có thể thay bằng model thực từ Spark)
+- Prediction: Load Spark ML Pipeline model từ MinIO và predict real-time
 - Output: Giá dự đoán + breakdown + confidence interval
 
 Chạy: streamlit run predict_app.py --server.port 8502
 URL: http://localhost:8502
 
-Model: Mock prediction (để dùng model thực, copy house_price_model.pkl vào root)
+Model: Spark ML Pipeline từ MinIO (s3a://house-lake/models/house_price/latest)
 """
 
 import streamlit as st
@@ -21,6 +21,15 @@ import requests
 from datetime import datetime
 import io
 import pickle
+import tempfile
+import shutil
+from minio import Minio
+from minio.error import S3Error
+
+# PySpark imports
+from pyspark.sql import SparkSession
+from pyspark.ml import PipelineModel
+from pyspark.sql import functions as F
 
 # --- CONFIG ---
 st.set_page_config(
@@ -50,6 +59,54 @@ st.markdown("""
     label, .stSelectbox label, .stMultiSelect label, .stSlider label, .stNumberInput label {
         color: #ffffff !important;
         font-weight: 500 !important;
+    }
+    
+    /* Input fields styling */
+    .stTextInput input, .stNumberInput input, .stSelectbox select {
+        background-color: #2d3250 !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(102, 126, 234, 0.3) !important;
+        border-radius: 10px !important;
+    }
+    
+    .stTextInput input:focus, .stNumberInput input:focus, .stSelectbox select:focus {
+        border-color: #667eea !important;
+        box-shadow: 0 0 0 1px #667eea !important;
+    }
+    
+    /* Selectbox dropdown */
+    div[data-baseweb="select"] > div {
+        background-color: #2d3250 !important;
+        border-color: rgba(102, 126, 234, 0.3) !important;
+    }
+    
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1e2336 0%, #252a42 100%) !important;
+    }
+    
+    section[data-testid="stSidebar"] .stMarkdown {
+        color: #e8eaf6 !important;
+    }
+    
+    /* Table styling */
+    .stDataFrame {
+        background-color: #2d3250 !important;
+    }
+    
+    .stDataFrame table {
+        color: #ffffff !important;
+        background-color: #2d3250 !important;
+    }
+    
+    .stDataFrame th {
+        background-color: #3a3f5c !important;
+        color: #ffffff !important;
+    }
+    
+    .stDataFrame td {
+        background-color: #2d3250 !important;
+        color: #e8eaf6 !important;
     }
     
     #MainMenu {visibility: hidden;}
@@ -122,6 +179,38 @@ MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "house-lake")
 MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
+MODEL_PREFIX = os.getenv("MODEL_PREFIX", "models/house_price")
+
+# Initialize MinIO client
+@st.cache_resource
+def get_minio_client():
+    """Initialize MinIO client"""
+    return Minio(
+        MINIO_ENDPOINT,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=MINIO_USE_SSL
+    )
+
+# Initialize Spark Session
+@st.cache_resource
+def get_spark_session():
+    """Initialize Spark Session with MinIO configuration"""
+    spark = SparkSession.builder \
+        .appName("HousePricePredictorApp") \
+        .config("spark.driver.memory", "2g") \
+        .config("spark.executor.memory", "2g") \
+        .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262") \
+        .config("spark.hadoop.fs.s3a.endpoint", f"http://{MINIO_ENDPOINT}") \
+        .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY) \
+        .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY) \
+        .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
+        .getOrCreate()
+    
+    spark.sparkContext.setLogLevel("ERROR")
+    return spark
 
 # Feature Engineering Functions (same as silver_job.py)
 def calculate_features(sqft, bedrooms, bathrooms, year_built, price=None):
@@ -154,24 +243,74 @@ def get_condition_score(condition):
     return condition_map.get(condition, 0.0)
 
 @st.cache_resource
-def load_sklearn_model():
+def load_spark_model():
     """
-    Load scikit-learn model từ MinIO hoặc local
-    Nếu bạn có model được train bằng scikit-learn và lưu dưới dạng pickle
+    Load Spark ML Pipeline model từ MinIO
+    Returns: (model, status_message)
+    
+    Note: Trên Windows cần HADOOP_HOME và winutils.exe
+    Nếu không có sẽ fallback về mock prediction
     """
     try:
-        # Try loading from local cache first
-        model_path = "house_price_model.pkl"
-        if os.path.exists(model_path):
-            with open(model_path, 'rb') as f:
-                model = pickle.load(f)
-            return model, "Loaded from local cache"
+        # Check if running on Windows without Hadoop
+        import platform
+        if platform.system() == "Windows":
+            import os
+            if not os.getenv("HADOOP_HOME"):
+                return None, "⚠️ Windows: HADOOP_HOME not set - using mock predictions (Spark model available in K8s deployment)"
         
-        # TODO: Implement MinIO loading if model is stored as pickle
-        # For now, return None to use mock prediction
-        return None, "Model not found - using mock predictions"
+        spark = get_spark_session()
+        model_path = f"s3a://{MINIO_BUCKET}/{MODEL_PREFIX}/latest"
+        
+        st.info(f"🔄 Loading model from MinIO: {model_path}")
+        
+        # Load PipelineModel from MinIO
+        model = PipelineModel.load(model_path)
+        
+        return model, f"✅ Model loaded successfully from {model_path}"
     except Exception as e:
-        return None, f"Error loading model: {str(e)}"
+        error_msg = f"⚠️ Model loading failed - using mock predictions. Deploy to K8s for real model inference."
+        return None, error_msg
+
+def predict_with_spark_model(model, input_data):
+    """
+    Predict using Spark ML Pipeline model
+    
+    Args:
+        model: PipelineModel loaded from MinIO
+        input_data: dict with input features
+    
+    Returns:
+        predicted_price: float
+    """
+    try:
+        spark = get_spark_session()
+        
+        # Create DataFrame from input
+        # Note: price_per_sqft will be 0 for prediction (model doesn't need it for inference)
+        input_df = spark.createDataFrame([{
+            'sqft': float(input_data['sqft']),
+            'bedrooms': float(input_data['bedrooms']),
+            'bathrooms': float(input_data['bathrooms']),
+            'year_built': float(input_data['year_built']),
+            'location': input_data['location'],
+            'condition': input_data['condition'],
+            'price_per_sqft': 0.0,  # Will be computed from features
+            'house_age': float(input_data['house_age']),
+            'total_rooms': float(input_data['total_rooms']),
+            'condition_score': float(input_data['condition_score'])
+        }])
+        
+        # Transform using pipeline (includes feature engineering + prediction)
+        predictions = model.transform(input_df)
+        
+        # Extract prediction
+        predicted_price = predictions.select('prediction').first()[0]
+        
+        return float(predicted_price)
+    except Exception as e:
+        st.error(f"Prediction error: {str(e)}")
+        raise
 
 def mock_predict(input_data):
     """
@@ -257,13 +396,24 @@ with st.sidebar:
     st.markdown("---")
     
     # Model info
-    model, model_status = load_sklearn_model()
     st.markdown("### 🤖 Model Status")
-    if model is not None:
-        st.success("✅ Model loaded successfully")
-    else:
-        st.warning("⚠️ Using mock predictions")
-    st.caption(model_status)
+    
+    col_model1, col_model2 = st.columns([3, 1])
+    with col_model1:
+        with st.spinner('Loading model from MinIO...'):
+            model, model_status = load_spark_model()
+        
+        if model is not None:
+            st.success("✅ Spark ML Pipeline loaded")
+            st.caption(f"Model: {MODEL_PREFIX}/latest")
+        else:
+            st.error("❌ Model loading failed")
+            st.caption(model_status)
+    
+    with col_model2:
+        if st.button("🔄", help="Reload model from MinIO", use_container_width=True):
+            st.cache_resource.clear()
+            st.rerun()
 
 # --- MAIN CONTENT ---
 col1, col2 = st.columns([1, 1])
@@ -351,23 +501,31 @@ with col2:
             'condition_score': condition_score
         }
         
-        # Predict
-        with st.spinner('🔄 Đang phân tích dữ liệu...'):
-            if model is not None:
-                # TODO: Use real model prediction
-                # predicted_price = model.predict([feature_vector])[0]
+        # Predict using Spark ML Pipeline model
+        with st.spinner('🔄 Đang phân tích dữ liệu với AI model...'):
+            try:
+                if model is not None:
+                    # Use real Spark ML Pipeline model
+                    predicted_price = predict_with_spark_model(model, input_data)
+                    model_used = "Spark ML Pipeline (RandomForest)"
+                else:
+                    # Fallback to mock if model not loaded
+                    predicted_price = mock_predict(input_data)
+                    model_used = "Mock Model (Heuristic)"
+                    st.warning("⚠️ Using fallback prediction - model not available")
+            except Exception as e:
+                st.error(f"Prediction failed: {str(e)}")
                 predicted_price = mock_predict(input_data)
-            else:
-                predicted_price = mock_predict(input_data)
+                model_used = "Mock Model (Error Fallback)"
         
         # Display prediction
         st.markdown("""
         <div class="prediction-card">
             <h3 style="text-align: center; color: #ffffff;">💰 Giá Dự Đoán</h3>
             <div class="prediction-value">${:,.0f}</div>
-            <p style="text-align: center; color: #b8c1ec;">Dựa trên phân tích AI</p>
+            <p style="text-align: center; color: #b8c1ec;">Model: {}</p>
         </div>
-        """.format(predicted_price), unsafe_allow_html=True)
+        """.format(predicted_price, model_used), unsafe_allow_html=True)
         
         # Display feature engineering results
         st.markdown("### 🔧 Features Tính Toán")

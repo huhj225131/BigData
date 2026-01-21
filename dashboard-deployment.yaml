@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: house-dashboard
+  namespace: default
+  labels:
+    app: house-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: house-dashboard
+  template:
+    metadata:
+      labels:
+        app: house-dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: huytq2809/house-dashboard:latest
+        imagePullPolicy: Always  # Always pull latest from Docker Hub
+        ports:
+        - containerPort: 8501
+          name: streamlit
+        env:
+        - name: POSTGRES_HOST
+          value: "postgres.postgres.svc.cluster.local"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          value: "house_warehouse"
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          value: "postgres"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: house-dashboard
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    app: house-dashboard
+  ports:
+  - port: 8501
+    targetPort: 8501
+    name: streamlit

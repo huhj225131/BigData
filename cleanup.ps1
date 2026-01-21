@@ -5,6 +5,17 @@ Write-Host "=" * 60 -ForegroundColor Red
 Write-Host "  ⚠️  CLEANUP SCRIPT - XÓA TẤT CẢ DỮ LIỆU" -ForegroundColor Red
 Write-Host "=" * 60 -ForegroundColor Red
 Write-Host ""
+
+# First, stop all running port-forward jobs
+Write-Host "Stopping port-forward jobs..." -ForegroundColor Yellow
+$jobs = Get-Job -ErrorAction SilentlyContinue
+if ($jobs) {
+    $jobs | Stop-Job -ErrorAction SilentlyContinue
+    $jobs | Remove-Job -ErrorAction SilentlyContinue
+    Write-Host "Stopped $($jobs.Count) port-forward jobs" -ForegroundColor Green
+}
+
+Write-Host ""
 Write-Host "Script này sẽ xóa:" -ForegroundColor Yellow
 Write-Host "  - Tất cả pods trong kafka, minio, postgres, spark namespaces" -ForegroundColor Yellow
 Write-Host "  - Tất cả deployments, services, statefulsets" -ForegroundColor Yellow

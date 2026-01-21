@@ -21,6 +21,7 @@ import altair as alt
 from datetime import datetime
 import warnings
 import subprocess
+import time
 
 # Silence pandas DBAPI warnings (we intentionally use psycopg2 connections here).
 warnings.filterwarnings(
@@ -277,12 +278,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- DB CONNECTION ---
+# K8s: Use service DNS, Local: Use localhost:5433
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "5433")),
-    "database": os.getenv("DB_NAME", "house_warehouse"),
-    "user": os.getenv("DB_USER", "postgres"),
-    "password": os.getenv("DB_PASSWORD", "postgres")
+    "host": os.getenv("POSTGRES_HOST", "localhost"),
+    "port": int(os.getenv("POSTGRES_PORT", "5433")),
+    "database": os.getenv("POSTGRES_DB", "house_warehouse"),
+    "user": os.getenv("POSTGRES_USER", "postgres"),
+    "password": os.getenv("POSTGRES_PASSWORD", "postgres")
 }
 
 # Altair Theme
@@ -317,20 +319,16 @@ def load_data():
     
     # SPEED LAYER: Real-time data (latency <10s)
     speed_query = """
-    SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition, created_at,
-           'SPEED' as source
+    SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition, created_at
     FROM house_data_speed 
-    ORDER BY created_at DESC 
-    LIMIT 1000
+    ORDER BY created_at DESC
     """
     
     # BATCH LAYER: High accuracy data
     fact_query = """
-    SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition,
-           created_at, 'BATCH' as source
+    SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition, created_at
     FROM fact_house 
     ORDER BY created_at DESC
-    LIMIT 2000
     """
     
     # GOLD LAYER: 4 aggregation tables
@@ -340,6 +338,9 @@ def load_data():
     decade_query = "SELECT * FROM gold_year_built_trends ORDER BY decade"
     
     pred_query = "SELECT actual_price, predicted_price, run_id FROM house_price_predictions ORDER BY as_of_utc DESC LIMIT 500"
+    
+    # ML METRICS: Read from model metrics table (only r2 and rmse available)
+    metrics_query = "SELECT r2, rmse, as_of_utc FROM ml_house_price_model_metrics ORDER BY as_of_utc DESC LIMIT 1"
     
     # Load Speed Layer
     try:
@@ -355,18 +356,6 @@ def load_data():
             df_fact['created_at'] = pd.to_datetime(df_fact['created_at'])
     except:
         df_fact = pd.DataFrame()
-    
-    # MERGE: Combine Speed + Batch
-    if not df_speed.empty and not df_fact.empty:
-        df_combined = pd.concat([df_speed, df_fact], ignore_index=True)
-        df_combined = df_combined.sort_values('created_at', ascending=False)
-        df_combined = df_combined.drop_duplicates(subset=['price', 'sqft', 'location', 'year_built'], keep='first')
-    elif not df_speed.empty:
-        df_combined = df_speed
-    elif not df_fact.empty:
-        df_combined = df_fact
-    else:
-        df_combined = pd.DataFrame()
         
     # Load Gold Layer
     try:
@@ -393,12 +382,18 @@ def load_data():
         df_pred = pd.read_sql(pred_query, conn)
     except:
         df_pred = pd.DataFrame()
+    
+    # Load ML Metrics
+    try:
+        df_metrics = pd.read_sql(metrics_query, conn)
+    except:
+        df_metrics = pd.DataFrame()
         
     conn.close()
-    return df_combined, df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred
+    return df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred, df_metrics
 
 # --- MAIN APP ---
-df_combined, df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred = load_data()
+df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred, df_metrics = load_data()
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -421,16 +416,14 @@ with st.sidebar:
     st.markdown("### 🎚️ Nguồn Dữ Liệu")
     data_source = st.radio(
         "Chọn layer",
-        ["🔥 Speed + Batch (Merge)", "⚡ Speed Only (Real-time)", "📦 Batch Only (Accurate)"],
+        ["⚡ Speed Only (Real-time)", "📦 Batch Only (Accurate)"],
         help="Speed: <10s latency | Batch: High accuracy"
     )
     
     if "Speed Only" in data_source:
         df_display = df_speed
-    elif "Batch Only" in data_source:
-        df_display = df_fact
     else:
-        df_display = df_combined
+        df_display = df_fact
     
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
     
@@ -502,10 +495,18 @@ st.markdown("""
 # --- KPI METRICS ---
 st.markdown("### 📈 Chỉ Số Hiệu Suất")
 
-def _render_batch_kpis(batch_df: pd.DataFrame):
-    """Render KPIs strictly from batch (fact_house)."""
-
 k1, k2, k3, k4 = st.columns(4)
+
+# Calculate KPIs from filtered data
+if not filtered_df.empty:
+    avg_price = filtered_df['price'].mean()
+    # Use 'sqft' instead of 'sqft_living' (column name from database)
+    avg_sqft = filtered_df['sqft'].mean() if 'sqft' in filtered_df.columns else 0
+    total_value = filtered_df['price'].sum()
+else:
+    avg_price = 0
+    avg_sqft = 0
+    total_value = 0
 
 with k1:
     speed_count = len(df_speed) if not df_speed.empty else 0
@@ -560,55 +561,18 @@ if not df_speed.empty:
     </div>
     """, unsafe_allow_html=True)
     
-    rt_col1, rt_col2 = st.columns([3, 1])
-    
-    with rt_col1:
-        st.markdown("#### 🔥 Dữ liệu mới nhất (Latency <10s)")
-        df_speed_display = df_speed.head(20)[['created_at', 'location', 'price', 'sqft', 'bedrooms', 'condition']]
-        df_speed_display = df_speed_display.rename(columns={
-            'created_at': '⏰ Thời gian',
-            'location': '📍 Vị trí',
-            'price': '💰 Giá',
-            'sqft': '📐 DT',
-            'bedrooms': '🛏️ PN',
-            'condition': '⭐ TT'
-        })
-        df_speed_display['💰 Giá'] = df_speed_display['💰 Giá'].apply(lambda x: f"${x:,.0f}")
-        st.dataframe(df_speed_display, hide_index=True, use_container_width=True, height=300)
-    
-    with rt_col2:
-        st.markdown("#### 📊 Latency So Sánh")
-        if not df_speed.empty and not df_fact.empty:
-            try:
-                now = pd.Timestamp.now(tz='UTC')
-                if df_speed['created_at'].dt.tz is None:
-                    df_speed_tz = df_speed.copy()
-                    df_speed_tz['created_at'] = pd.to_datetime(df_speed_tz['created_at']).dt.tz_localize('UTC')
-                else:
-                    df_speed_tz = df_speed
-                
-                if df_fact['created_at'].dt.tz is None:
-                    df_fact_tz = df_fact.copy()
-                    df_fact_tz['created_at'] = pd.to_datetime(df_fact_tz['created_at']).dt.tz_localize('UTC')
-                else:
-                    df_fact_tz = df_fact
-                
-                latest_speed = df_speed_tz['created_at'].max()
-                latest_batch = df_fact_tz['created_at'].max()
-                
-                speed_lag = (now - latest_speed).total_seconds()
-                batch_lag = (now - latest_batch).total_seconds()
-                
-                st.metric("⚡ Speed Lag", f"{speed_lag:.1f}s")
-                st.metric("📦 Batch Lag", f"{batch_lag/60:.1f}m")
-                
-                if batch_lag > 0:
-                    improvement = ((batch_lag - speed_lag) / batch_lag) * 100
-                    st.metric("🚀 Cải thiện", f"{improvement:.0f}%")
-            except:
-                st.info("Đang tính toán...")
-        else:
-            st.info("Chưa đủ data để so sánh")
+    st.markdown("#### 🔥 Dữ liệu mới nhất")
+    df_speed_display = df_speed.head(20)[['created_at', 'location', 'price', 'sqft', 'bedrooms', 'condition']]
+    df_speed_display = df_speed_display.rename(columns={
+        'created_at': '⏰ Thời gian',
+        'location': '📍 Vị trí',
+        'price': '💰 Giá',
+        'sqft': '📐 DT',
+        'bedrooms': '🛏️ PN',
+        'condition': '⭐ TT'
+    })
+    df_speed_display['💰 Giá'] = df_speed_display['💰 Giá'].apply(lambda x: f"${x:,.0f}")
+    st.dataframe(df_speed_display, hide_index=True, use_container_width=True, height=300)
     
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
 
@@ -831,9 +795,6 @@ with tab5:
                 tooltip=[alt.Tooltip('Source:N', title='Source'), alt.Tooltip('Count:Q', title='Records')]
             ).properties(height=250)
             st.altair_chart(pie, use_container_width=True)
-        
-        st.markdown("**🔄 Best of Both Worlds**")
-        st.info("Dashboard merge Speed + Batch để có cả low latency VÀ high accuracy!")
 
 # --- SECTION 4: AI VALUATION (ML) ---
 st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
@@ -891,11 +852,14 @@ with m2:
 
 with m3:
     st.markdown("#### 📈 Chỉ số mô hình")
-    if not df_pred.empty:
+    if not df_metrics.empty and not df_pred.empty:
+        # Đọc R² và RMSE từ database (bảng ml_house_price_model_metrics)
+        r2 = df_metrics['r2'].iloc[0]
+        rmse = df_metrics['rmse'].iloc[0]
+        
+        # Tính MAE và MAPE từ predictions (không có trong metrics table)
         mae = abs(df_pred['predicted_price'] - df_pred['actual_price']).mean()
         mape = (abs(df_pred['predicted_price'] - df_pred['actual_price']) / df_pred['actual_price']).mean() * 100
-        r2_approx = 1 - (((df_pred['predicted_price'] - df_pred['actual_price'])**2).sum() / 
-                         ((df_pred['actual_price'] - df_pred['actual_price'].mean())**2).sum())
         
         st.markdown(f"""
         <div class="metric-card" style="margin-bottom: 1rem;">
@@ -914,9 +878,11 @@ with m3:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">R² Score</div>
-            <div class="metric-value" style="font-size: 1.5rem;">{r2_approx:.3f}</div>
+            <div class="metric-value" style="font-size: 1.5rem;">{r2:.3f}</div>
         </div>
         """, unsafe_allow_html=True)
+    else:
+        st.warning("🤖 Chưa có metrics. Chạy Spark ML Training Job.")
 
 # --- FOOTER ---
 st.markdown("""
