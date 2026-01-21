@@ -2,7 +2,9 @@ kafka-python
 boto3
 pyarrow
 pandas
-
 streamlit
-psycopg2-binary
 altair
+psycopg2-binary
+numpy
+scikit-learn
+requests

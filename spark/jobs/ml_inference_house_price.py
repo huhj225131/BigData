@@ -44,21 +44,29 @@ def main() -> None:
 
     df = spark.read.parquet(silver_path)
 
+    # Load features from Silver (including pre-computed features)
     df = df.select(
         F.col("created_at"),
         F.col("id"),
         F.col("price").cast("double").alias("actual_price"),
+        # Original features
         F.col("sqft").cast("double").alias("sqft"),
         F.col("bedrooms").cast("double").alias("bedrooms"),
         F.col("bathrooms").cast("double").alias("bathrooms"),
         F.col("year_built").cast("double").alias("year_built"),
         F.col("location"),
         F.col("condition"),
+        # Pre-computed features from Silver
+        F.col("price_per_sqft").cast("double").alias("price_per_sqft"),
+        F.col("house_age").cast("double").alias("house_age"),
+        F.col("total_rooms").cast("double").alias("total_rooms"),
+        F.col("condition_score").cast("double").alias("condition_score"),
     )
 
-    df = df.dropna(subset=["location", "year_built"]).fillna(
-        {"sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown"}
-    )
+    df = df.dropna(subset=["location", "year_built"]).fillna({
+        "sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown",
+        "price_per_sqft": 0.0, "house_age": 0.0, "total_rooms": 0.0, "condition_score": 0.0
+    })
 
     model_path = args.model_path.strip() or f"s3a://{args.bucket}/models/house_price/latest"
     model = PipelineModel.load(model_path)

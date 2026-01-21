@@ -1,7 +1,6 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, when, expr
+from pyspark.sql.functions import from_json, col, when, expr, initcap, lower, trim, lit
 from pyspark.sql.types import StructType, StringType, IntegerType, DoubleType
-from pyspark.sql.functions import lit
 import os
 
 # --- CẤU HÌNH ---
@@ -20,6 +19,9 @@ CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "/tmp/spark-checkpoint")
 
 spark = SparkSession.builder \
     .appName("HouseDataStreamingCleaner") \
+    .config("spark.jars.packages", 
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
+            "org.postgresql:postgresql:42.7.1") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
@@ -58,7 +60,12 @@ cleaned_df = df.na.fill({
     "condition": "Good"
 })
 
-# Bước B: Xử lý Outlier (IQR thay thế bằng Filter)
+# Bước B: Normalize text (giống Silver job để dashboard merge dễ hơn)
+cleaned_df = cleaned_df \
+    .withColumn("location", initcap(lower(trim(col("location"))))) \
+    .withColumn("condition", initcap(lower(trim(col("condition")))))
+
+# Bước C: Xử lý Outlier (IQR thay thế bằng Filter)
 # Trong streaming, IQR rất khó tính real-time. 
 # Thay vào đó ta dùng ngưỡng nghiệp vụ (Domain Knowledge) 
 # Ví dụ: Giá nhà thường từ 50k đến 5M, diện tích > 100 sqft

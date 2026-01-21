@@ -118,6 +118,14 @@ def main():
 
     # Dedup within this batch by Kafka identity
     df = df.dropDuplicates(["topic", "partition", "offset"])
+    
+    # Dedup by business key (handle producer restart sending same data)
+    # Keep the LATEST record (highest offset) for each unique house
+    from pyspark.sql.window import Window
+    window_spec = Window.partitionBy("id", "price", "sqft", "location", "year_built").orderBy(F.col("offset").desc())
+    df = df.withColumn("_row_num", F.row_number().over(window_spec)) \
+           .filter(F.col("_row_num") == 1) \
+           .drop("_row_num")
 
     normalized = F.regexp_replace(
         F.regexp_replace(F.col("ingest_time_utc"), "T", " "),
@@ -178,7 +186,22 @@ def main():
             # Table doesn't exist yet (first run) or schema mismatch: treat as no state.
             pass
 
-    # Silver lake schema: keep it clean (no Kafka metadata)
+    # ===== FEATURE ENGINEERING (minimal - analysis only) =====
+    # Chỉ tính toán các features hữu ích cho analysis/dashboard
+    # ML code sẽ tự tính toán features riêng để đảm bảo consistency
+    
+    df = df.withColumn("price_per_sqft", F.col("price") / (F.col("sqft") + 0.1))
+    df = df.withColumn("house_age", F.lit(2026) - F.col("year_built"))
+    df = df.withColumn("total_rooms", F.col("bedrooms") + F.col("bathrooms"))
+    df = df.withColumn(
+        "condition_score",
+        F.when(F.col("condition") == "Excellent", 3)
+        .when(F.col("condition") == "Good", 2)
+        .when(F.col("condition") == "Fair", 1)
+        .otherwise(0)
+    )
+
+    # Silver lake schema: clean data + basic derived features
     df_silver = df.select(
         F.col("created_at"),
         F.col("id"),
@@ -189,6 +212,11 @@ def main():
         F.col("location"),
         F.col("year_built"),
         F.col("condition"),
+        # Derived features (for analysis)
+        F.col("price_per_sqft"),
+        F.col("house_age"),
+        F.col("total_rooms"),
+        F.col("condition_score"),
     )
 
     df_silver.write.mode("append").parquet(silver_path)

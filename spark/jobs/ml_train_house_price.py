@@ -52,21 +52,30 @@ def main() -> None:
 
     df = spark.read.parquet(silver_path)
 
-    # Minimal column selection + null handling
+    # Load features from Silver (sử dụng features đã được tính sẵn + features gốc)
     df = (
         df.select(
             F.col("id"),
             F.col("created_at"),
             F.col("price").cast("double").alias("label"),
+            # Original features
             F.col("sqft").cast("double").alias("sqft"),
             F.col("bedrooms").cast("double").alias("bedrooms"),
             F.col("bathrooms").cast("double").alias("bathrooms"),
             F.col("year_built").cast("double").alias("year_built"),
             F.col("location").alias("location"),
             F.col("condition").alias("condition"),
+            # Pre-computed features from Silver
+            F.col("price_per_sqft").cast("double").alias("price_per_sqft"),
+            F.col("house_age").cast("double").alias("house_age"),
+            F.col("total_rooms").cast("double").alias("total_rooms"),
+            F.col("condition_score").cast("double").alias("condition_score"),
         )
         .dropna(subset=["label", "location", "year_built"])
-        .fillna({"sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown"})
+        .fillna({
+            "sqft": 0.0, "bedrooms": 0.0, "bathrooms": 0.0, "condition": "Unknown",
+            "price_per_sqft": 0.0, "house_age": 0.0, "total_rooms": 0.0, "condition_score": 0.0
+        })
     )
 
     # Categorical preprocessing
@@ -87,8 +96,16 @@ def main() -> None:
         handleInvalid="keep",
     )
 
+    # Feature assembly: original features + 4 pre-computed features from Silver
     assembler = VectorAssembler(
-        inputCols=["sqft", "bedrooms", "bathrooms", "year_built", "location_ohe", "condition_ohe"],
+        inputCols=[
+            # Original numeric
+            "sqft", "bedrooms", "bathrooms", "year_built",
+            # Engineered features (4 cái)
+            "price_per_sqft", "house_age", "total_rooms", "condition_score",
+            # One-hot encoded categoricals
+            "location_ohe", "condition_ohe"
+        ],
         outputCol="features",
         handleInvalid="keep",
     )
@@ -102,7 +119,9 @@ def main() -> None:
         maxDepth=int(_env("RF_MAX_DEPTH", "10")),
     )
 
-    pipeline = Pipeline(stages=[location_indexer, condition_indexer, encoder, assembler, rf])
+    pipeline = Pipeline(stages=[
+        location_indexer, condition_indexer, encoder, assembler, rf
+    ])
 
     train_df, test_df = df.randomSplit([args.train_ratio, 1.0 - args.train_ratio], seed=args.seed)
 
