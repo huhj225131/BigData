@@ -44,19 +44,16 @@ def main() -> None:
 
     df = spark.read.parquet(silver_path)
 
-    # Load features from Silver (including pre-computed features)
     df = df.select(
         F.col("created_at"),
         F.col("id"),
         F.col("price").cast("double").alias("actual_price"),
-        # Original features
         F.col("sqft").cast("double").alias("sqft"),
         F.col("bedrooms").cast("double").alias("bedrooms"),
         F.col("bathrooms").cast("double").alias("bathrooms"),
         F.col("year_built").cast("double").alias("year_built"),
         F.col("location"),
         F.col("condition"),
-        # Pre-computed features from Silver
         F.col("price_per_sqft").cast("double").alias("price_per_sqft"),
         F.col("house_age").cast("double").alias("house_age"),
         F.col("total_rooms").cast("double").alias("total_rooms"),
@@ -87,7 +84,6 @@ def main() -> None:
         .withColumn("as_of_utc", F.current_timestamp())
     )
 
-    # Write to MinIO (gold)
     pred_path = f"s3a://{args.bucket}/{args.gold_prefix}/predictions_house_price/"
     out.write.mode("append").parquet(pred_path)
 

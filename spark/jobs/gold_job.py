@@ -37,9 +37,7 @@ def main():
 
     df = spark.read.parquet(silver_path)
 
-    # ===== GOLD AGGREGATIONS (4 BẢNG CHÍNH) =====
-    
-    # 1. Location Stats - Thống kê theo vị trí
+
     gold_location_stats = (
         df.groupBy("location")
         .agg(
@@ -58,7 +56,6 @@ def main():
         .withColumn("as_of_utc", F.current_timestamp())
     )
 
-    # 2. Condition Quality - Thống kê theo tình trạng nhà
     gold_condition_stats = (
         df.groupBy("condition")
         .agg(
@@ -73,7 +70,6 @@ def main():
         .withColumn("as_of_utc", F.current_timestamp())
     )
 
-    # 3. Price by Bedrooms - Phân tích theo số phòng ngủ
     gold_bedroom_analysis = (
         df.groupBy("bedrooms")
         .agg(
@@ -91,7 +87,6 @@ def main():
         .withColumn("as_of_utc", F.current_timestamp())
     )
 
-    # 4. Year Built Trends - xu hướng giá theo năm xây dựng
     gold_year_built_trends = (
         df.withColumn("decade", (F.floor(F.col("year_built") / 10) * 10).cast("int"))
         .groupBy("decade")
@@ -107,7 +102,6 @@ def main():
         .withColumn("as_of_utc", F.current_timestamp())
     )
 
-    # Write to MinIO
     gold_location_path = f"{gold_base}/location_stats/"
     gold_condition_path = f"{gold_base}/condition_stats/"
     gold_bedroom_path = f"{gold_base}/bedroom_analysis/"

@@ -25,13 +25,10 @@ import tempfile
 import shutil
 from minio import Minio
 from minio.error import S3Error
-
-# PySpark imports
 from pyspark.sql import SparkSession
 from pyspark.ml import PipelineModel
 from pyspark.sql import functions as F
 
-# --- CONFIG ---
 st.set_page_config(
     page_title="Dự Đoán Giá Nhà - AI Assistant", 
     layout="wide", 
@@ -39,7 +36,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Professional Custom CSS
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -173,7 +169,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- MINIO CONFIG ---
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
@@ -181,7 +176,6 @@ MINIO_BUCKET = os.getenv("MINIO_BUCKET", "house-lake")
 MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
 MODEL_PREFIX = os.getenv("MODEL_PREFIX", "models/house_price")
 
-# Initialize MinIO client
 @st.cache_resource
 def get_minio_client():
     """Initialize MinIO client"""
@@ -192,7 +186,6 @@ def get_minio_client():
         secure=MINIO_USE_SSL
     )
 
-# Initialize Spark Session
 @st.cache_resource
 def get_spark_session():
     """Initialize Spark Session with MinIO configuration"""
@@ -212,7 +205,6 @@ def get_spark_session():
     spark.sparkContext.setLogLevel("ERROR")
     return spark
 
-# Feature Engineering Functions (same as silver_job.py)
 def calculate_features(sqft, bedrooms, bathrooms, year_built, price=None):
     """Calculate engineered features matching Silver job"""
     features = {}
@@ -252,7 +244,6 @@ def load_spark_model():
     Nếu không có sẽ fallback về mock prediction
     """
     try:
-        # Check if running on Windows without Hadoop
         import platform
         if platform.system() == "Windows":
             import os
@@ -263,8 +254,7 @@ def load_spark_model():
         model_path = f"s3a://{MINIO_BUCKET}/{MODEL_PREFIX}/latest"
         
         st.info(f"🔄 Loading model from MinIO: {model_path}")
-        
-        # Load PipelineModel from MinIO
+
         model = PipelineModel.load(model_path)
         
         return model, f"✅ Model loaded successfully from {model_path}"
@@ -286,8 +276,6 @@ def predict_with_spark_model(model, input_data):
     try:
         spark = get_spark_session()
         
-        # Create DataFrame from input
-        # Note: price_per_sqft will be 0 for prediction (model doesn't need it for inference)
         input_df = spark.createDataFrame([{
             'sqft': float(input_data['sqft']),
             'bedrooms': float(input_data['bedrooms']),
@@ -301,10 +289,8 @@ def predict_with_spark_model(model, input_data):
             'condition_score': float(input_data['condition_score'])
         }])
         
-        # Transform using pipeline (includes feature engineering + prediction)
         predictions = model.transform(input_df)
-        
-        # Extract prediction
+
         predicted_price = predictions.select('prediction').first()[0]
         
         return float(predicted_price)
@@ -366,7 +352,6 @@ def mock_predict(input_data):
     
     return predicted_price
 
-# --- HEADER ---
 st.markdown("""
 <div class="main-header">
     <h1>🤖 AI Dự Đoán Giá Nhà</h1>
@@ -374,7 +359,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.markdown("### 📋 Hướng Dẫn Sử Dụng")
     st.markdown("""
@@ -395,7 +379,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Model info
     st.markdown("### 🤖 Model Status")
     
     col_model1, col_model2 = st.columns([3, 1])
@@ -415,7 +398,6 @@ with st.sidebar:
             st.cache_resource.clear()
             st.rerun()
 
-# --- MAIN CONTENT ---
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -475,7 +457,6 @@ with col1:
             help="Tình trạng hiện tại của ngôi nhà"
         )
         
-        # Submit button
         st.markdown("<br>", unsafe_allow_html=True)
         submitted = st.form_submit_button("🔮 Dự Đoán Giá", use_container_width=True)
 
@@ -483,11 +464,9 @@ with col2:
     st.markdown("### 🎯 Kết Quả Dự Đoán")
     
     if submitted:
-        # Calculate engineered features
         features = calculate_features(sqft, bedrooms, bathrooms, year_built)
         condition_score = get_condition_score(condition)
-        
-        # Prepare input data
+
         input_data = {
             'sqft': sqft,
             'bedrooms': bedrooms,
@@ -501,15 +480,12 @@ with col2:
             'condition_score': condition_score
         }
         
-        # Predict using Spark ML Pipeline model
         with st.spinner('🔄 Đang phân tích dữ liệu với AI model...'):
             try:
                 if model is not None:
-                    # Use real Spark ML Pipeline model
                     predicted_price = predict_with_spark_model(model, input_data)
                     model_used = "Spark ML Pipeline (RandomForest)"
                 else:
-                    # Fallback to mock if model not loaded
                     predicted_price = mock_predict(input_data)
                     model_used = "Mock Model (Heuristic)"
                     st.warning("⚠️ Using fallback prediction - model not available")
@@ -518,7 +494,6 @@ with col2:
                 predicted_price = mock_predict(input_data)
                 model_used = "Mock Model (Error Fallback)"
         
-        # Display prediction
         st.markdown("""
         <div class="prediction-card">
             <h3 style="text-align: center; color: #ffffff;">💰 Giá Dự Đoán</h3>
@@ -527,7 +502,6 @@ with col2:
         </div>
         """.format(predicted_price, model_used), unsafe_allow_html=True)
         
-        # Display feature engineering results
         st.markdown("### 🔧 Features Tính Toán")
         
         feature_cols = st.columns(2)
@@ -555,7 +529,6 @@ with col2:
             </div>
             """.format(condition_score), unsafe_allow_html=True)
             
-            # Estimated price per sqft
             estimated_price_per_sqft = predicted_price / sqft
             st.markdown("""
             <div class="feature-card">
@@ -564,7 +537,6 @@ with col2:
             </div>
             """.format(estimated_price_per_sqft), unsafe_allow_html=True)
         
-        # Price breakdown
         st.markdown("### 📊 Phân Tích Chi Tiết")
         
         breakdown_data = pd.DataFrame({
@@ -581,14 +553,12 @@ with col2:
         
         st.dataframe(breakdown_data, hide_index=True, use_container_width=True)
         
-        # Confidence interval
         st.markdown("### 📈 Khoảng Tin Cậy")
         lower_bound = predicted_price * 0.9
         upper_bound = predicted_price * 1.1
         
         st.info(f"📊 Giá thực tế có thể dao động từ **${lower_bound:,.0f}** đến **${upper_bound:,.0f}**")
         
-        # Save prediction history
         if 'prediction_history' not in st.session_state:
             st.session_state.prediction_history = []
         
@@ -604,7 +574,6 @@ with col2:
     else:
         st.info("👈 Nhập thông tin bên trái và nhấn 'Dự Đoán Giá' để bắt đầu")
 
-# --- PREDICTION HISTORY ---
 if 'prediction_history' in st.session_state and len(st.session_state.prediction_history) > 0:
     st.markdown("---")
     st.markdown("### 📜 Lịch Sử Dự Đoán")
@@ -618,7 +587,6 @@ if 'prediction_history' in st.session_state and len(st.session_state.prediction_
         st.session_state.prediction_history = []
         st.rerun()
 
-# --- FOOTER ---
 st.markdown("""
 <div style="text-align: center; margin-top: 3rem; padding: 2rem; color: rgba(255,255,255,0.4);">
     <hr style="border: 1px solid rgba(255,255,255,0.1);">

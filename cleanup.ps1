@@ -1,4 +1,3 @@
-# 🧹 Cleanup Script - Xóa sạch tất cả pods và dữ liệu
 
 Write-Host ""
 Write-Host "=" * 60 -ForegroundColor Red
@@ -6,7 +5,6 @@ Write-Host "  ⚠️  CLEANUP SCRIPT - XÓA TẤT CẢ DỮ LIỆU" -ForegroundC
 Write-Host "=" * 60 -ForegroundColor Red
 Write-Host ""
 
-# First, stop all running port-forward jobs
 Write-Host "Stopping port-forward jobs..." -ForegroundColor Yellow
 $jobs = Get-Job -ErrorAction SilentlyContinue
 if ($jobs) {
@@ -33,10 +31,9 @@ if ($confirm -ne "yes") {
 }
 
 Write-Host ""
-Write-Host "🗑️  Bắt đầu cleanup..." -ForegroundColor Yellow
+Write-Host "  Bắt đầu cleanup..." -ForegroundColor Yellow
 Write-Host ""
 
-# Step 1: Delete all resources in namespaces
 Write-Host "[1/5] Xóa resources trong kafka namespace..." -ForegroundColor Cyan
 kubectl delete all --all -n kafka 2>$null
 kubectl delete configmap --all -n kafka 2>$null
@@ -68,17 +65,17 @@ kubectl get pvc -n default -o name 2>$null | ForEach-Object {
 }
 
 Write-Host ""
-Write-Host "⏳ Đợi resources cleanup..." -ForegroundColor Yellow
+Write-Host " Đợi resources cleanup..." -ForegroundColor Yellow
 Start-Sleep -Seconds 5
 
 # Verify cleanup
 Write-Host ""
 Write-Host "=" * 60 -ForegroundColor Green
-Write-Host "  ✅ CLEANUP HOÀN TẤT" -ForegroundColor Green
+Write-Host "   CLEANUP HOÀN TẤT" -ForegroundColor Green
 Write-Host "=" * 60 -ForegroundColor Green
 Write-Host ""
 
-Write-Host "📊 Trạng thái hiện tại:" -ForegroundColor Cyan
+Write-Host " Trạng thái hiện tại:" -ForegroundColor Cyan
 Write-Host ""
 
 $namespaces = @("kafka", "minio", "postgres", "spark")
@@ -95,7 +92,7 @@ $totalPvcs = (kubectl get pvc -A 2>$null | Select-String -Pattern "(kafka|minio|
 Write-Host "  $(if ($totalPvcs -eq 0) { '✅' } else { '⚠️ ' }) Total PVCs: $totalPvcs" -ForegroundColor $(if ($totalPvcs -eq 0) { "Green" } else { "Yellow" })
 
 Write-Host ""
-Write-Host "🚀 Cluster đã sạch sẽ! Sẵn sàng deploy lại." -ForegroundColor Green
+Write-Host " Cluster đã sạch sẽ! Sẵn sàng deploy lại." -ForegroundColor Green
 Write-Host ""
-Write-Host "📖 Để deploy lại, xem: QUICK_START.md" -ForegroundColor Cyan
+Write-Host " Để deploy lại, xem: QUICK_START.md" -ForegroundColor Cyan
 Write-Host ""

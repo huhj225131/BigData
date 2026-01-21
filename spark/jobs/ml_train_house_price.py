@@ -52,20 +52,17 @@ def main() -> None:
 
     df = spark.read.parquet(silver_path)
 
-    # Load features from Silver (sử dụng features đã được tính sẵn + features gốc)
     df = (
         df.select(
             F.col("id"),
             F.col("created_at"),
             F.col("price").cast("double").alias("label"),
-            # Original features
             F.col("sqft").cast("double").alias("sqft"),
             F.col("bedrooms").cast("double").alias("bedrooms"),
             F.col("bathrooms").cast("double").alias("bathrooms"),
             F.col("year_built").cast("double").alias("year_built"),
             F.col("location").alias("location"),
             F.col("condition").alias("condition"),
-            # Pre-computed features from Silver
             F.col("price_per_sqft").cast("double").alias("price_per_sqft"),
             F.col("house_age").cast("double").alias("house_age"),
             F.col("total_rooms").cast("double").alias("total_rooms"),
@@ -78,7 +75,6 @@ def main() -> None:
         })
     )
 
-    # Categorical preprocessing
     location_indexer = StringIndexer(
         inputCol="location",
         outputCol="location_idx",
@@ -96,14 +92,10 @@ def main() -> None:
         handleInvalid="keep",
     )
 
-    # Feature assembly: original features + 4 pre-computed features from Silver
     assembler = VectorAssembler(
         inputCols=[
-            # Original numeric
             "sqft", "bedrooms", "bathrooms", "year_built",
-            # Engineered features (4 cái)
             "price_per_sqft", "house_age", "total_rooms", "condition_score",
-            # One-hot encoded categoricals
             "location_ohe", "condition_ohe"
         ],
         outputCol="features",

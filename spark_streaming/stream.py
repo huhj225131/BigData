@@ -3,18 +3,15 @@ from pyspark.sql.functions import from_json, col, when, expr, initcap, lower, tr
 from pyspark.sql.types import StructType, StringType, IntegerType, DoubleType
 import os
 
-# --- CẤU HÌNH ---
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka-service.kafka.svc.cluster.local:9092")
 TOPIC_NAME = os.getenv("KAFKA_TOPIC", "data-stream")
 
-# PostgreSQL Config
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres.postgres.svc.cluster.local")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "house_warehouse")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 
-# Checkpoint (dùng MinIO cho production)
 CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "/tmp/spark-checkpoint")
 
 spark = SparkSession.builder \
@@ -27,7 +24,6 @@ spark = SparkSession.builder \
 
 spark.sparkContext.setLogLevel("WARN")
 
-# Schema khớp với dữ liệu house_data của bạn
 schema = StructType() \
     .add("id", IntegerType()) \
     .add("price", DoubleType()) \
@@ -38,22 +34,16 @@ schema = StructType() \
     .add("year_built", IntegerType()) \
     .add("condition", StringType())
 
-# 1. Đọc luồng từ Kafka
 raw_df = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", KAFKA_BROKER) \
     .option("subscribe", TOPIC_NAME) \
     .load()
 
-# 2. Parse JSON
 df = raw_df.selectExpr("CAST(value AS STRING)") \
     .select(from_json(col("value"), schema).alias("data")) \
     .select("data.*")
 
-# 3. --- LOGIC LÀM SẠCH (CHUYỂN TỪ PANDAS) ---
-
-# Bước A: Xử lý missing values (fillna)
-# Vì là streaming, ta thường fill bằng các hằng số hoặc giá trị trung bình đã biết trước
 cleaned_df = df.na.fill({
     "price": 0.0,
     "sqft": 0,
@@ -61,16 +51,11 @@ cleaned_df = df.na.fill({
     "condition": "Good"
 })
 
-# Bước B: Normalize text (giống Silver job để dashboard merge dễ hơn)
 cleaned_df = cleaned_df \
     .withColumn("location", initcap(lower(trim(col("location"))))) \
     .withColumn("condition", initcap(lower(trim(col("condition")))))
 
 
-
-
-
-# PostgreSQL Connection
 db_properties = {
     "user": POSTGRES_USER,
     "password": POSTGRES_PASSWORD,
@@ -83,7 +68,6 @@ TARGET_TABLE = os.getenv("POSTGRES_TABLE", "house_data_speed")
 def write_to_postgres(df, epoch_id):
     """Ghi batch vào PostgreSQL với metadata"""
     try:
-        # Thêm cột để sau này biết dòng này từ luồng Stream đẩy vào
         df_with_source = df.withColumn("created_at", expr("current_timestamp()"))
         count = df_with_source.count()
         if count > 0:
@@ -100,8 +84,7 @@ def write_to_postgres(df, epoch_id):
         print(f"[Batch {epoch_id}] Lỗi ghi PostgreSQL: {e}")
         raise
 
-# Kích hoạt ghi dữ liệu
-print(f"🚀 Khởi động Spark Streaming...")
+print(f"   Khởi động Spark Streaming...")
 print(f"   Kafka: {KAFKA_BROKER}")
 print(f"   Topic: {TOPIC_NAME}")
 print(f"   PostgreSQL: {jdbc_url}")

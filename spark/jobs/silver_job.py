@@ -116,11 +116,9 @@ def main():
         }
     )
 
-    # Dedup within this batch by Kafka identity
     df = df.dropDuplicates(["topic", "partition", "offset"])
     
-    # Dedup by business key (handle producer restart sending same data)
-    # Keep the LATEST record (highest offset) for each unique house
+
     from pyspark.sql.window import Window
     window_spec = Window.partitionBy("id", "price", "sqft", "location", "year_built").orderBy(F.col("offset").desc())
     df = df.withColumn("_row_num", F.row_number().over(window_spec)) \
@@ -156,8 +154,7 @@ def main():
 
     df = df.withColumn("created_at", created_at)
 
-    # Optional incremental filter: if Postgres fact table already has offsets,
-    # only process records with offset > max(offset) per (topic, partition).
+
     if args.write_postgres and args.pg_mode == "append" and args.dedup_strategy == "pg-max-offset":
         def _quote_ident(name: str) -> str:
             return '"' + name.replace('"', '""') + '"'
@@ -186,10 +183,6 @@ def main():
             # Table doesn't exist yet (first run) or schema mismatch: treat as no state.
             pass
 
-    # ===== FEATURE ENGINEERING (minimal - analysis only) =====
-    # Chỉ tính toán các features hữu ích cho analysis/dashboard
-    # ML code sẽ tự tính toán features riêng để đảm bảo consistency
-    
     df = df.withColumn("price_per_sqft", F.col("price") / (F.col("sqft") + 0.1))
     df = df.withColumn("house_age", F.lit(2026) - F.col("year_built"))
     df = df.withColumn("total_rooms", F.col("bedrooms") + F.col("bathrooms"))
@@ -201,7 +194,6 @@ def main():
         .otherwise(0)
     )
 
-    # Silver lake schema: clean data + basic derived features
     df_silver = df.select(
         F.col("created_at"),
         F.col("id"),
@@ -212,7 +204,6 @@ def main():
         F.col("location"),
         F.col("year_built"),
         F.col("condition"),
-        # Derived features (for analysis)
         F.col("price_per_sqft"),
         F.col("house_age"),
         F.col("total_rooms"),
@@ -222,7 +213,6 @@ def main():
     df_silver.write.mode("append").parquet(silver_path)
 
     if args.write_postgres:
-        # Postgres fact table: keep Kafka identity columns to support incremental processing.
         df_fact = df.select(
             F.col("topic"),
             F.col("partition"),

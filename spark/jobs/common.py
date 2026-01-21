@@ -9,18 +9,6 @@ def _env(name: str, default: str) -> str:
 
 
 def build_spark(app_name: str) -> SparkSession:
-    """Create SparkSession with MinIO (S3A) defaults.
-
-    Env:
-      - MINIO_ENDPOINT (http://host:9000)
-      - MINIO_ACCESS_KEY / MINIO_SECRET_KEY
-      - S3A_PATH_STYLE_ACCESS (true|false)
-      - SPARK_S3_PACKAGES (optional)
-
-    Note: If your Spark image does not include Hadoop AWS jars, either:
-      - set SPARK_S3_PACKAGES, or
-      - pass --packages to spark-submit.
-    """
 
     endpoint = _env("MINIO_ENDPOINT", "http://minio.minio.svc.cluster.local:9000")
     access_key = _env("MINIO_ACCESS_KEY", "minioadmin")

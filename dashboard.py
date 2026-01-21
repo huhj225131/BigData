@@ -1,17 +1,3 @@
-"""
-📊 BigData Dashboard - Real Estate Analytics
-
-Chức năng:
-- Lambda Architecture: Speed Layer + Batch Layer
-- Real-time data visualization (<10s latency)
-- Gold analytics từ 4 bảng Spark aggregations
-- ML predictions display
-
-Chạy: streamlit run dashboard.py --server.port 8501
-URL: http://localhost:8501
-
-Database: PostgreSQL (port 5433)
-"""
 
 import streamlit as st
 import pandas as pd
@@ -23,14 +9,12 @@ import warnings
 import subprocess
 import time
 
-# Silence pandas DBAPI warnings (we intentionally use psycopg2 connections here).
 warnings.filterwarnings(
     "ignore",
     message=r"pandas only supports SQLAlchemy connectable.*",
     category=UserWarning,
 )
 
-# --- CONFIG ---
 st.set_page_config(
     page_title="Trung Tâm Phân Tích Bất Động Sản", 
     layout="wide", 
@@ -38,7 +22,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Professional Custom CSS
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -277,8 +260,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- DB CONNECTION ---
-# K8s: Use service DNS, Local: Use localhost:5433
 DB_CONFIG = {
     "host": os.getenv("POSTGRES_HOST", "localhost"),
     "port": int(os.getenv("POSTGRES_PORT", "5433")),
@@ -287,7 +268,6 @@ DB_CONFIG = {
     "password": os.getenv("POSTGRES_PASSWORD", "postgres")
 }
 
-# Altair Theme
 def configure_altair_theme():
     return {
         'config': {
@@ -317,21 +297,18 @@ alt.themes.enable('dashboard_dark')
 def load_data():
     conn = psycopg2.connect(**DB_CONFIG)
     
-    # SPEED LAYER: Real-time data (latency <10s)
     speed_query = """
     SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition, created_at
     FROM house_data_speed 
     ORDER BY created_at DESC
     """
     
-    # BATCH LAYER: High accuracy data
     fact_query = """
     SELECT price, sqft, bedrooms, bathrooms, year_built, location, condition, created_at
     FROM fact_house 
     ORDER BY created_at DESC
     """
     
-    # GOLD LAYER: 4 aggregation tables
     loc_query = "SELECT * FROM gold_location_stats ORDER BY avg_price DESC"
     cond_query = "SELECT * FROM gold_condition_stats ORDER BY avg_price DESC"
     bedroom_query = "SELECT * FROM gold_bedroom_analysis ORDER BY bedrooms"
@@ -339,17 +316,14 @@ def load_data():
     
     pred_query = "SELECT actual_price, predicted_price, run_id FROM house_price_predictions ORDER BY as_of_utc DESC LIMIT 500"
     
-    # ML METRICS: Read from model metrics table (only r2 and rmse available)
     metrics_query = "SELECT r2, rmse, as_of_utc FROM ml_house_price_model_metrics ORDER BY as_of_utc DESC LIMIT 1"
     
-    # Load Speed Layer
     try:
         df_speed = pd.read_sql(speed_query, conn)
         df_speed['created_at'] = pd.to_datetime(df_speed['created_at'])
     except:
         df_speed = pd.DataFrame()
     
-    # Load Batch Layer
     try:
         df_fact = pd.read_sql(fact_query, conn)
         if 'created_at' in df_fact.columns:
@@ -357,7 +331,6 @@ def load_data():
     except:
         df_fact = pd.DataFrame()
         
-    # Load Gold Layer
     try:
         df_loc = pd.read_sql(loc_query, conn)
     except:
@@ -383,7 +356,6 @@ def load_data():
     except:
         df_pred = pd.DataFrame()
     
-    # Load ML Metrics
     try:
         df_metrics = pd.read_sql(metrics_query, conn)
     except:
@@ -392,10 +364,8 @@ def load_data():
     conn.close()
     return df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred, df_metrics
 
-# --- MAIN APP ---
 df_speed, df_fact, df_loc, df_cond, df_bedroom, df_decade, df_pred, df_metrics = load_data()
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.markdown("""
     <div class="sidebar-header">
@@ -475,7 +445,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-# Apply Filters
 filtered_df = df_display.copy()
 if not filtered_df.empty:
     if selected_locs:
@@ -484,7 +453,6 @@ if not filtered_df.empty:
         filtered_df = filtered_df[filtered_df['condition'].isin(selected_conds)]
     filtered_df = filtered_df[(filtered_df['price'] >= price_range[0]) & (filtered_df['price'] <= price_range[1])]
 
-# --- HEADER ---
 st.markdown("""
 <div class="main-header">
     <h1>🏠 Trung Tâm Phân Tích Bất Động Sản</h1>
@@ -492,15 +460,12 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- KPI METRICS ---
 st.markdown("### 📈 Chỉ Số Hiệu Suất")
 
 k1, k2, k3, k4 = st.columns(4)
 
-# Calculate KPIs from filtered data
 if not filtered_df.empty:
     avg_price = filtered_df['price'].mean()
-    # Use 'sqft' instead of 'sqft_living' (column name from database)
     avg_sqft = filtered_df['sqft'].mean() if 'sqft' in filtered_df.columns else 0
     total_value = filtered_df['price'].sum()
 else:
@@ -550,7 +515,6 @@ with k1:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- SECTION 1.5: REAL-TIME FEED (SPEED LAYER) ---
 if not df_speed.empty:
     st.markdown("""
     <div class="section-card">
@@ -578,7 +542,6 @@ if not df_speed.empty:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- SECTION 2: MARKET INTELLIGENCE ---
 st.markdown("""
 <div class="section-card">
     <div class="section-title">
@@ -706,7 +669,6 @@ with tab3:
             ).properties(height=350)
             st.altair_chart(price_sqft_line, use_container_width=True)
     
-    # Bảng chi tiết
     if not df_bedroom.empty:
         st.markdown("**📊 Bảng thống kê chi tiết**")
         bed_display = df_bedroom[['bedrooms', 'total_houses', 'avg_price', 'median_price', 'min_price', 'max_price', 'avg_sqft', 'avg_price_per_sqft']].copy()
@@ -796,7 +758,6 @@ with tab5:
             ).properties(height=250)
             st.altair_chart(pie, use_container_width=True)
 
-# --- SECTION 4: AI VALUATION (ML) ---
 st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
 
 st.markdown("""
@@ -853,11 +814,9 @@ with m2:
 with m3:
     st.markdown("#### 📈 Chỉ số mô hình")
     if not df_metrics.empty and not df_pred.empty:
-        # Đọc R² và RMSE từ database (bảng ml_house_price_model_metrics)
         r2 = df_metrics['r2'].iloc[0]
         rmse = df_metrics['rmse'].iloc[0]
         
-        # Tính MAE và MAPE từ predictions (không có trong metrics table)
         mae = abs(df_pred['predicted_price'] - df_pred['actual_price']).mean()
         mape = (abs(df_pred['predicted_price'] - df_pred['actual_price']) / df_pred['actual_price']).mean() * 100
         
@@ -884,7 +843,6 @@ with m3:
     else:
         st.warning("🤖 Chưa có metrics. Chạy Spark ML Training Job.")
 
-# --- FOOTER ---
 st.markdown("""
 <div class="dashboard-footer">
     <hr class='custom-divider'>
@@ -893,7 +851,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Auto-refresh logic
 if auto_refresh:
     time.sleep(2)  # Giảm xuống 2s để update nhanh hơn
     st.rerun()
