@@ -23,12 +23,10 @@ MAX_RETRY = int(_env("MAX_RETRY", "10"))
 MINIO_BUCKET = _env("MINIO_BUCKET", "hungluu-test-bucket")
 BRONZE_PREFIX = _env("BRONZE_PREFIX", "bronze")
 
-# batch: yêu cầu 100-500 msgs hoặc 1-5 phút
 BATCH_SIZE = int(_env("BATCH_SIZE", "200"))
 BATCH_TIMEOUT_SECONDS = int(_env("BATCH_TIMEOUT_SECONDS", "180"))
 
-# output
-OUTPUT_FORMAT = _env("OUTPUT_FORMAT", "jsonl").lower()  # jsonl|parquet (parquet optional)
+OUTPUT_FORMAT = _env("OUTPUT_FORMAT", "jsonl").lower()  
 
 
 conf = {
@@ -76,7 +74,6 @@ def _write_batch_local(records: list[dict], output_format: str) -> tuple[str, st
                 "Install pyarrow or set OUTPUT_FORMAT=jsonl"
             ) from e
 
-        # keep schema stable: store payload as JSON string
         rows = []
         for r in records:
             rows.append(
@@ -173,7 +170,6 @@ def process_messages(consumer):
         consumer.close()
 
 if __name__ == "__main__":
-    # Ensure bucket exists (will use MINIO_* env)
     create_minio_bucket(MINIO_BUCKET)
 
     consumer = create_comsumer()

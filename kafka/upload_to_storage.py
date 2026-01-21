@@ -53,7 +53,6 @@ def create_minio_bucket(bucket_name: str, s3=None):
         if not s3:
             raise RuntimeError("Failed to create S3 client")
 
-        # Prefer head_bucket (cheap) over list_buckets.
         try:
             s3.head_bucket(Bucket=bucket_name)
             return
@@ -65,9 +64,7 @@ def create_minio_bucket(bucket_name: str, s3=None):
     except NoCredentialsError:
         print("Credentials not available")
 
-# Check if an object exists in a bucket
 def check_object_exists(source_bucket_name, object_name):
-    # Check if an object exists in MinIO
     try:
         s3 = get_s3_client()
         response = s3.head_object(Bucket=source_bucket_name, Key=object_name)
@@ -77,15 +74,12 @@ def check_object_exists(source_bucket_name, object_name):
     except s3.exceptions.NoSuchKey:
         print(f"Object {object_name} does not exist in {source_bucket_name}")
 
-# Check if an object from one bucket to another
 def copy_object(
         source_bucket_name, 
         source_object_name, 
         destination_bucket_name,
         destination_object_name):
-    # Copy an object in MinIO
     try:
-        # Ensure the destination bucket exists
         create_minio_bucket(destination_bucket_name)
 
         s3 = get_s3_client()
@@ -98,9 +92,7 @@ def copy_object(
     except NoCredentialsError:
         print("Credentials not available")
 
-# Delete an object from bucket
 def delete_object(bucket_name, object_name):
-    # Delete an object from MinIO bucket
     try:
         s3 = get_s3_client()
         s3.delete_object(Bucket=bucket_name, Key=object_name)
@@ -108,14 +100,10 @@ def delete_object(bucket_name, object_name):
     except NoCredentialsError:
         print("Credentials not available")
 
-# Upload data from local to S3 bucket
 def upload_to_s3(file_path, bucket_name, object_name):
-    # Upload a file to MinIO
     try:
         s3 = get_s3_client()
-        # Create bucket if not exists
         create_minio_bucket(bucket_name, s3=s3)
-        # Upload the file to s3 bucket
         s3.upload_file(file_path, bucket_name, object_name)
         print(f"File uploaded successfully to {bucket_name}/{object_name}")
     except FileNotFoundError:
@@ -123,9 +111,7 @@ def upload_to_s3(file_path, bucket_name, object_name):
     except NoCredentialsError:
         print("Credentials not available")
 
-# Download data from S3 bucket to local
 def download_from_s3(source_bucket_name, object_name, local_file_path):
-    # Download a file from MinIO
     try:
         s3 = get_s3_client()
         s3.download_file(source_bucket_name, object_name, local_file_path)
@@ -134,7 +120,6 @@ def download_from_s3(source_bucket_name, object_name, local_file_path):
         print("Credentials not available")
 
 if __name__ == "__main__":
-    # Small connectivity smoke-check (optional)
     bucket = _env("MINIO_BUCKET", "hungluu-test-bucket")
     s3 = get_s3_client()
     if s3:

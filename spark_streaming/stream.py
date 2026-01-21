@@ -66,7 +66,6 @@ jdbc_url = f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 TARGET_TABLE = os.getenv("POSTGRES_TABLE", "house_data_speed") 
 
 def write_to_postgres(df, epoch_id):
-    """Ghi batch vào PostgreSQL với metadata"""
     try:
         df_with_source = df.withColumn("created_at", expr("current_timestamp()"))
         count = df_with_source.count()

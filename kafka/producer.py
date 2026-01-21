@@ -2,44 +2,34 @@ from kafka import KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
 import json, sys, time, os
 
-# --- CẤU HÌNH ---
 KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'localhost:9092')
 TOPIC_NAME = 'data-stream'
 DATA_FILE = 'kafka/house_data.json'
 INTERVAL = 3
-# DATA_FILE = '/app/house_data.json'
-# INTERVAL = int(os.getenv('INTERVAL', '3'))
-MAX_RECORDS = int(os.getenv('MAX_RECORDS', '0'))  # 0 = send all
+MAX_RECORDS = int(os.getenv('MAX_RECORDS', '0'))  
 REPEAT = os.getenv('REPEAT', '0').strip().lower() in ('1', 'true', 'yes', 'y')
 MAX_RETRY = 10
 
-# --- CÁC HÀM XỬ LÝ ---
 
 def on_send_success(record_metadata):
-    """Callback khi gửi thành công"""
     print(f"✓ Gửi thành công tới {record_metadata.topic} [{record_metadata.partition}] @ offset {record_metadata.offset}")
 
 def on_send_error(excp):
-    """Callback khi gửi thất bại"""
     print(f"✗ Gửi thất bại: {excp}")
 
 def create_producer():
-    """Tạo KafkaProducer với cơ chế Retry"""
     for attempt in range(1, MAX_RETRY + 1):
         try:
             print(f"Lần thử kết nối thứ {attempt} tới {KAFKA_BROKER}...")
             
             producer = KafkaProducer(
                 bootstrap_servers=[KAFKA_BROKER],
-                # Tự động serialize JSON và Encode UTF-8 tại đây
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                 key_serializer=lambda k: str(k).encode('utf-8'),
-                # Các cấu hình khác (đổi dấu chấm thành gạch dưới)
                 acks='all',
                 retries=5,
                 request_timeout_ms=120000,
                 metadata_max_age_ms=300000,
-                # api_version=(0, 10, 1) # Bật dòng này nếu Kafka quá cũ hoặc không tự nhận diện version
             )
             
             print("✓ Tạo producer thành công")
@@ -58,7 +48,6 @@ def create_producer():
     sys.exit(1)
 
 def load_data(file_path):
-    """Đọc dữ liệu từ file JSON (Giữ nguyên logic cũ)"""
     print(f"\nĐang đọc dữ liệu từ: {file_path}")
     
     try:
@@ -84,25 +73,19 @@ def load_data(file_path):
 
 def send_message(producer, key, value, sleep_time):
     try:
-        # Trong kafka-python, send() trả về một Future
         future = producer.send(TOPIC_NAME, key=key, value=value)
-        
-        # Gắn callback
+
         future.add_callback(on_send_success)
         future.add_errback(on_send_error)
-        
-        # Đợi một chút để giả lập stream
+
         time.sleep(sleep_time)
         
     except Exception as e:
         print(f"✗ Lỗi khi gửi: {e}")
 
-# --- MAIN ---
 if __name__ == "__main__":
-    # 1. Khởi tạo kết nối
     producer = create_producer()
-    
-    # 2. Đọc dữ liệu
+
     data = load_data(DATA_FILE)
     
     print(f"Bắt đầu gửi dữ liệu vào topic '{TOPIC_NAME}'...")
@@ -117,7 +100,6 @@ if __name__ == "__main__":
                 if MAX_RECORDS > 0 and total_sent >= MAX_RECORDS:
                     raise StopIteration
 
-                # Lấy key (ưu tiên cột 'id', nếu không có thì lấy số thứ tự)
                 key = record.get("id", str(i))
 
                 total_sent += 1

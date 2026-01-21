@@ -6,18 +6,15 @@ metadata:
   namespace: kafka
 data:
   # --- Identity & Roles ---
-  CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"  # Đã đổi sang UUID hợp lệ thay vì hungluu415527
+  CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"  
   KAFKA_NODE_ID: "1"
   KAFKA_PROCESS_ROLES: "broker,controller"
   
   # --- Networking ---
-  # Quan trọng: Trong K8s, voter phải trỏ về DNS đầy đủ của Pod
   KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-0.kafka-service.kafka.svc.cluster.local:9093"
   
   KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
-  # Advertised: Đây là địa chỉ để client kết nối. 
-  # Nếu dùng nội bộ K3s thì dùng DNS này. 
-  # Nếu muốn port-forward từ máy local, bạn có thể sửa dòng dưới thành: PLAINTEXT://localhost:9092
+  
   KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-0.kafka-service.kafka.svc.cluster.local:9092"
   
   KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
@@ -49,7 +46,7 @@ spec:
     app: kafka
 
 ---
-# 3. StatefulSet (Đã tinh gọn cho Confluent Image)
+# 3. StatefulSet 
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -68,15 +65,14 @@ spec:
     spec:
       containers:
       - name: kafka
-        image: confluentinc/cp-kafka:7.8.3  # Dùng đúng image bạn yêu cầu
+        image: confluentinc/cp-kafka:7.8.3  
         ports:
         - containerPort: 9092
         - containerPort: 9093
         envFrom:
         - configMapRef:
             name: kafka-config
-        # Confluent image tự động chạy script format nếu thấy CLUSTER_ID
-        # nên không cần override 'command' nữa. Rất gọn!
+       
         volumeMounts:
         - name: kafka-data
           mountPath: /var/lib/kafka/data
